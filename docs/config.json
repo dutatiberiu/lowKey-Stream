@@ -1,6 +1,6 @@
 {
   "tunnel_url": "https://passes-katrina-detect-channels.trycloudflare.com",
-  "updated_at": "2026-02-07T15:40:16.429923+00:00",
+  "updated_at": "2026-02-07T15:55:17.998699+00:00",
   "server_status": "online",
   "videos": [
     {
@@ -11,6 +11,16 @@
       "size_display": "7.63 GB",
       "extension": ".mkv",
       "playable": false,
+      "folder": "At.Eternitys.Gate.2018.1080p.BluRay.x264-CiNEFiLE"
+    },
+    {
+      "name": "at.eternitys.gate.2018.1080p.bluray.x264-cinefile",
+      "filename": "at.eternitys.gate.2018.1080p.bluray.x264-cinefile.mp4",
+      "path": "At.Eternitys.Gate.2018.1080p.BluRay.x264-CiNEFiLE/at.eternitys.gate.2018.1080p.bluray.x264-cinefile.mp4",
+      "size": 1415053776,
+      "size_display": "1.32 GB",
+      "extension": ".mp4",
+      "playable": true,
       "folder": "At.Eternitys.Gate.2018.1080p.BluRay.x264-CiNEFiLE"
     },
     {
