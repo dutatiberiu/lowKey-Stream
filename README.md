@@ -1,6 +1,8 @@
-# lowKey-Stream
+# lowkey-Stream
 
 Stream local video files from your home PC to anywhere through Cloudflare Tunnel + GitHub Pages.
+
+Live ---> https://dutatiberiu.github.io/lowKey-Stream/
 
 ## How it works
 
