@@ -3,7 +3,7 @@
     "server_port": 8080,
     "github_token": "ghp_YOUR_TOKEN_HERE",
     "github_repo": "dutatiberiu/lowKey-Stream",
-    "github_config_path": "frontend/config.json",
+    "github_config_path": "docs/config.json",
     "supported_extensions": [".mp4", ".mkv", ".avi", ".mov", ".webm"],
     "browser_playable": [".mp4", ".webm"],
     "health_check_interval": 60
