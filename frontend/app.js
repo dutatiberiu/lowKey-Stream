@@ -1,0 +1,405 @@
+// ============================================================
+// lowKey-Stream - Frontend Application
+// ============================================================
+
+const state = {
+    tunnelUrl: null,
+    videos: [],
+    filteredVideos: [],
+    folders: [],
+    currentFolder: 'all',
+    currentVideo: null,
+    serverOnline: false,
+    lastUpdated: null
+};
+
+// DOM Elements
+const videoPlayer = document.getElementById('videoPlayer');
+const videoContainer = document.getElementById('videoContainer');
+const videoOverlay = document.getElementById('videoOverlay');
+const videoItems = document.getElementById('videoItems');
+const searchInput = document.getElementById('searchInput');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const folderTabs = document.getElementById('folderTabs');
+const videoCount = document.getElementById('videoCount');
+const nowPlayingTitle = document.getElementById('nowPlayingTitle');
+const nowPlayingMeta = document.getElementById('nowPlayingMeta');
+const formatWarning = document.getElementById('formatWarning');
+const formatWarningText = document.getElementById('formatWarningText');
+
+// ============================================================
+// Initialization
+// ============================================================
+
+async function init() {
+    try {
+        // Fetch config.json from same origin (GitHub Pages)
+        const response = await fetch('config.json?t=' + Date.now());
+        const config = await response.json();
+
+        state.tunnelUrl = config.tunnel_url;
+        state.lastUpdated = config.updated_at;
+
+        if (!state.tunnelUrl) {
+            updateStatus('offline', 'Server not started yet. Run stream_server.py on your PC.');
+            return;
+        }
+
+        // Use video list from config (embedded by Python script)
+        if (config.videos && config.videos.length > 0) {
+            state.videos = config.videos;
+            state.filteredVideos = [...state.videos];
+            extractFolders();
+            renderFolderTabs();
+            renderVideoList();
+        }
+
+        // Verify tunnel is actually alive
+        await checkServerHealth();
+
+    } catch (error) {
+        console.error('Failed to load config:', error);
+        updateStatus('offline', 'Could not load config. Is the site deployed?');
+    }
+}
+
+// ============================================================
+// Server Communication
+// ============================================================
+
+async function checkServerHealth() {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+        const response = await fetch(state.tunnelUrl + '/api/health', {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+            state.serverOnline = true;
+            updateStatus('online');
+            return true;
+        }
+    } catch (error) {
+        state.serverOnline = false;
+        updateStatus('offline', 'Server not responding. Is it running?');
+    }
+    return false;
+}
+
+async function refreshVideoList() {
+    if (!state.tunnelUrl) return;
+
+    try {
+        const response = await fetch(state.tunnelUrl + '/api/videos');
+        const data = await response.json();
+        state.videos = data.videos;
+        state.filteredVideos = [...state.videos];
+        extractFolders();
+        renderFolderTabs();
+        renderVideoList();
+    } catch (error) {
+        console.error('Failed to refresh video list:', error);
+    }
+}
+
+// ============================================================
+// Folder Extraction & Tabs
+// ============================================================
+
+function extractFolders() {
+    const folderSet = new Set();
+    state.videos.forEach(video => {
+        if (video.folder && video.folder !== '') {
+            folderSet.add(video.folder);
+        }
+    });
+    state.folders = Array.from(folderSet).sort();
+}
+
+function renderFolderTabs() {
+    if (state.folders.length === 0) {
+        folderTabs.style.display = 'none';
+        return;
+    }
+
+    folderTabs.style.display = 'flex';
+    let html = '<div class="tab active" data-folder="all" onclick="filterByFolder(\'all\')">All</div>';
+    state.folders.forEach(folder => {
+        const escapedFolder = folder.replace(/'/g, "\\'");
+        html += `<div class="tab" data-folder="${folder}" onclick="filterByFolder('${escapedFolder}')">${folder}</div>`;
+    });
+    folderTabs.innerHTML = html;
+}
+
+function filterByFolder(folder) {
+    state.currentFolder = folder;
+    document.querySelectorAll('.folder-tabs .tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.folder === folder);
+    });
+    applyFilters();
+}
+
+// ============================================================
+// Search & Filter
+// ============================================================
+
+function applyFilters() {
+    let filtered = state.videos;
+
+    // Folder filter
+    if (state.currentFolder !== 'all') {
+        filtered = filtered.filter(v => v.folder === state.currentFolder);
+    }
+
+    // Search filter
+    const query = searchInput.value.toLowerCase().trim();
+    if (query) {
+        filtered = filtered.filter(v =>
+            v.name.toLowerCase().includes(query) ||
+            v.folder.toLowerCase().includes(query) ||
+            v.filename.toLowerCase().includes(query)
+        );
+    }
+
+    state.filteredVideos = filtered;
+    renderVideoList();
+}
+
+// ============================================================
+// Video List Rendering
+// ============================================================
+
+function renderVideoList() {
+    videoCount.textContent = `${state.filteredVideos.length} video${state.filteredVideos.length !== 1 ? 's' : ''}`;
+
+    if (state.filteredVideos.length === 0) {
+        videoItems.innerHTML = `
+            <div class="empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <p>No videos found</p>
+            </div>`;
+        return;
+    }
+
+    videoItems.innerHTML = state.filteredVideos.map((video, index) => {
+        const isActive = state.currentVideo && state.currentVideo.path === video.path;
+        const playableClass = video.playable ? '' : 'not-playable';
+        const warningBadge = video.playable ? '' : '<span class="badge-warning" title="May not play in browser">!</span>';
+        const extBadge = video.extension.replace('.', '').toUpperCase();
+
+        return `
+            <div class="video-item ${isActive ? 'active' : ''} ${playableClass}"
+                 onclick="playVideo(${index})" data-index="${index}">
+                <div class="video-item-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                    ${warningBadge}
+                </div>
+                <div class="video-item-info">
+                    <div class="video-item-name" title="${video.filename}">${video.name}</div>
+                    <div class="video-item-meta">
+                        <span class="meta-folder">${video.folder || 'Root'}</span>
+                        <span class="meta-size">${video.size_display}</span>
+                        <span class="meta-ext">${extBadge}</span>
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+// ============================================================
+// Video Playback
+// ============================================================
+
+function playVideo(index) {
+    const video = state.filteredVideos[index];
+    if (!video) return;
+
+    // Format warning
+    if (!video.playable) {
+        showFormatWarning(video.extension);
+    } else {
+        hideFormatWarning();
+    }
+
+    state.currentVideo = video;
+
+    // Build video URL
+    const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
+    const videoUrl = `${state.tunnelUrl}/video/${encodedPath}`;
+
+    videoPlayer.src = videoUrl;
+    videoPlayer.load();
+    videoPlayer.play().catch(err => {
+        console.error('Playback error:', err);
+    });
+
+    // Update UI
+    videoOverlay.classList.add('hidden');
+    nowPlayingTitle.textContent = video.name;
+    nowPlayingMeta.innerHTML = `
+        <span class="meta-folder">${video.folder || 'Root'}</span>
+        <span class="meta-size">${video.size_display}</span>
+        <span class="meta-ext">${video.extension.replace('.', '').toUpperCase()}</span>`;
+
+    renderVideoList();
+
+    // Scroll active item into view
+    setTimeout(() => {
+        const activeItem = document.querySelector('.video-item.active');
+        if (activeItem) {
+            activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }, 100);
+}
+
+function playNext() {
+    if (!state.currentVideo) return;
+    const currentIndex = state.filteredVideos.findIndex(v => v.path === state.currentVideo.path);
+    if (currentIndex < state.filteredVideos.length - 1) {
+        playVideo(currentIndex + 1);
+    }
+}
+
+function playPrevious() {
+    if (!state.currentVideo) return;
+    const currentIndex = state.filteredVideos.findIndex(v => v.path === state.currentVideo.path);
+    if (currentIndex > 0) {
+        playVideo(currentIndex - 1);
+    }
+}
+
+// ============================================================
+// Format Warning
+// ============================================================
+
+function showFormatWarning(extension) {
+    formatWarningText.textContent = `${extension.toUpperCase()} format may not play in your browser. Convert with: ffmpeg -i input${extension} -codec copy output.mp4`;
+    formatWarning.classList.add('visible');
+}
+
+function hideFormatWarning() {
+    formatWarning.classList.remove('visible');
+}
+
+// ============================================================
+// Status Indicator
+// ============================================================
+
+function updateStatus(status, message) {
+    statusDot.className = 'status-dot ' + status;
+    if (status === 'online') {
+        const timeStr = state.lastUpdated ? formatTimestamp(state.lastUpdated) : '';
+        statusText.textContent = timeStr ? `Connected (updated ${timeStr})` : 'Connected';
+    } else {
+        statusText.textContent = message || 'Server offline';
+    }
+}
+
+function formatTimestamp(isoString) {
+    if (!isoString) return '';
+    try {
+        const date = new Date(isoString);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+        return '';
+    }
+}
+
+// ============================================================
+// Keyboard Shortcuts
+// ============================================================
+
+document.addEventListener('keydown', (e) => {
+    // Don't capture when typing in search
+    if (e.target.tagName === 'INPUT') return;
+
+    switch (e.code) {
+        case 'Space':
+            e.preventDefault();
+            if (videoPlayer.paused) videoPlayer.play();
+            else videoPlayer.pause();
+            break;
+        case 'KeyF':
+            e.preventDefault();
+            if (!document.fullscreenElement) {
+                videoContainer.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+            break;
+        case 'ArrowRight':
+            if (e.shiftKey) {
+                playNext();
+            } else {
+                videoPlayer.currentTime += 10;
+            }
+            break;
+        case 'ArrowLeft':
+            if (e.shiftKey) {
+                playPrevious();
+            } else {
+                videoPlayer.currentTime -= 10;
+            }
+            break;
+        case 'ArrowUp':
+            e.preventDefault();
+            videoPlayer.volume = Math.min(1, videoPlayer.volume + 0.1);
+            break;
+        case 'ArrowDown':
+            e.preventDefault();
+            videoPlayer.volume = Math.max(0, videoPlayer.volume - 0.1);
+            break;
+        case 'KeyM':
+            videoPlayer.muted = !videoPlayer.muted;
+            break;
+    }
+});
+
+// ============================================================
+// Video Events
+// ============================================================
+
+videoPlayer.addEventListener('ended', () => {
+    playNext();
+});
+
+videoPlayer.addEventListener('error', () => {
+    if (videoPlayer.error) {
+        console.error('Video error:', videoPlayer.error.message);
+        if (state.currentVideo && !state.currentVideo.playable) {
+            showFormatWarning(state.currentVideo.extension);
+        }
+    }
+});
+
+// Click overlay to dismiss
+videoOverlay.addEventListener('click', () => {
+    if (state.filteredVideos.length > 0) {
+        playVideo(0);
+    }
+});
+
+// ============================================================
+// Event Listeners & Start
+// ============================================================
+
+searchInput.addEventListener('input', () => applyFilters());
+
+// Periodic health check (every 2 minutes)
+setInterval(() => {
+    if (state.tunnelUrl) {
+        checkServerHealth();
+    }
+}, 120000);
+
+// Start
+init();
