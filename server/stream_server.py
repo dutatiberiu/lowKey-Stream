@@ -303,22 +303,43 @@ class TunnelManager:
         self.process = None
         self.tunnel_url = None
 
+    @staticmethod
+    def _find_cloudflared():
+        """Find cloudflared executable, checking common install paths on Windows."""
+        import shutil
+        path = shutil.which("cloudflared")
+        if path:
+            return path
+        # Common Windows install locations
+        for candidate in [
+            r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
+            r"C:\Program Files\cloudflared\cloudflared.exe",
+        ]:
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
     def start(self):
         """Start cloudflared tunnel and extract the URL. Returns the tunnel URL."""
         self.tunnel_url = None
         url_found = threading.Event()
 
+        cloudflared_path = self._find_cloudflared()
+        if not cloudflared_path:
+            print("[ERROR] 'cloudflared' not found!")
+            print("        Install it with: winget install Cloudflare.cloudflared")
+            print("        Or download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
+            sys.exit(1)
+
         try:
             self.process = subprocess.Popen(
-                ["cloudflared", "tunnel", "--url", f"http://localhost:{self.local_port}"],
+                [cloudflared_path, "tunnel", "--url", f"http://localhost:{self.local_port}"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
         except FileNotFoundError:
-            print("[ERROR] 'cloudflared' not found!")
-            print("        Install it with: winget install Cloudflare.cloudflared")
-            print("        Or download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
+            print("[ERROR] Could not start cloudflared!")
             sys.exit(1)
 
         def read_output(stream):
