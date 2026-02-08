@@ -21,8 +21,6 @@ D:\Filme → Python Server (HTTP) ←→ Frontend (HTML/JS)
 3. Script auto-updates GitHub Pages config with the tunnel URL
 4. Frontend fetches config, displays video list, streams through tunnel.
 
-## Quick Start
-
 ```bash
 # 1. Install cloudflared
 winget install Cloudflare.cloudflared
