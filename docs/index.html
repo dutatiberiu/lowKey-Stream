@@ -3,37 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>lowKey-Stream</title>
+    <title>lowkey.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <div class="noise-overlay" aria-hidden="true"></div>
     <div class="app-container">
         <!-- HEADER -->
         <header class="header">
             <div class="logo">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="url(#logoGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <defs>
-                        <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" style="stop-color:#6c5ce7"/>
-                            <stop offset="100%" style="stop-color:#00d4ff"/>
-                        </linearGradient>
-                    </defs>
-                    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
-                    <line x1="7" y1="2" x2="7" y2="22"/>
-                    <line x1="17" y1="2" x2="17" y2="22"/>
-                    <line x1="2" y1="12" x2="22" y2="12"/>
-                    <line x1="2" y1="7" x2="7" y2="7"/>
-                    <line x1="2" y1="17" x2="7" y2="17"/>
-                    <line x1="17" y1="7" x2="22" y2="7"/>
-                    <line x1="17" y1="17" x2="22" y2="17"/>
-                </svg>
-                <h1>lowKey<span class="accent">Stream</span></h1>
-            </div>
-            <div class="header-info">
-                <div class="status-bar" id="statusBar">
-                    <span class="status-dot" id="statusDot"></span>
-                    <span class="status-text" id="statusText">Connecting...</span>
-                </div>
+                <img src="../images/logo_videoPlayer.png" alt="lowkey." class="logo-img">
             </div>
         </header>
 
@@ -57,7 +39,7 @@
                         Your browser does not support the video element.
                     </video>
                     <div class="video-overlay" id="videoOverlay">
-                        <svg class="big-play-icon" width="80" height="80" viewBox="0 0 24 24" fill="rgba(108, 92, 231, 0.6)" stroke="none">
+                        <svg class="big-play-icon" width="80" height="80" viewBox="0 0 24 24" fill="rgba(200, 255, 0, 0.6)" stroke="none">
                             <polygon points="5 3 19 12 5 21 5 3"/>
                         </svg>
                         <div class="overlay-text">Select a video to play</div>
@@ -103,6 +85,12 @@
                     </div>
                 </div>
             </aside>
+        </div>
+
+        <!-- STATUS BAR -->
+        <div class="status-bar" id="statusBar">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="status-text" id="statusText">Connecting...</span>
         </div>
     </div>
 
