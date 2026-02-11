@@ -9,8 +9,7 @@ const state = {
     folders: [],
     currentFolder: 'all',
     currentVideo: null,
-    serverOnline: false,
-    lastUpdated: null
+    serverOnline: false
 };
 
 // DOM Elements
@@ -34,29 +33,21 @@ const formatWarningText = document.getElementById('formatWarningText');
 
 async function init() {
     try {
-        // Fetch config.json from same origin (GitHub Pages)
-        const response = await fetch('config.json?t=' + Date.now());
+        const response = await fetch('config.json');
         const config = await response.json();
 
         state.tunnelUrl = config.tunnel_url;
-        state.lastUpdated = config.updated_at;
 
         if (!state.tunnelUrl) {
-            updateStatus('offline', 'Server not started yet. Run stream_server.py on your PC.');
+            updateStatus('offline', 'Tunnel URL not configured in config.json.');
             return;
         }
 
-        // Use video list from config (embedded by Python script)
-        if (config.videos && config.videos.length > 0) {
-            state.videos = config.videos;
-            state.filteredVideos = [...state.videos];
-            extractFolders();
-            renderFolderTabs();
-            renderVideoList();
+        // Check if server is online, then fetch video list from server
+        const online = await checkServerHealth();
+        if (online) {
+            await refreshVideoList();
         }
-
-        // Verify tunnel is actually alive
-        await checkServerHealth();
 
     } catch (error) {
         console.error('Failed to load config:', error);
@@ -297,20 +288,9 @@ function hideFormatWarning() {
 function updateStatus(status, message) {
     statusDot.className = 'status-dot ' + status;
     if (status === 'online') {
-        const timeStr = state.lastUpdated ? formatTimestamp(state.lastUpdated) : '';
-        statusText.textContent = timeStr ? `Connected (updated ${timeStr})` : 'Connected';
+        statusText.textContent = 'Connected';
     } else {
         statusText.textContent = message || 'Server offline';
-    }
-}
-
-function formatTimestamp(isoString) {
-    if (!isoString) return '';
-    try {
-        const date = new Date(isoString);
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-        return '';
     }
 }
 
@@ -394,10 +374,13 @@ videoOverlay.addEventListener('click', () => {
 
 searchInput.addEventListener('input', () => applyFilters());
 
-// Periodic health check (every 2 minutes)
-setInterval(() => {
+// Periodic health check + video list refresh (every 2 minutes)
+setInterval(async () => {
     if (state.tunnelUrl) {
-        checkServerHealth();
+        const online = await checkServerHealth();
+        if (online) {
+            await refreshVideoList();
+        }
     }
 }, 120000);
 

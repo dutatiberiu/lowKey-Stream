@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-lowKey-Stream Server v1.1
-Serves local video files through a Cloudflare Tunnel and updates GitHub Pages config.
+lowKey-Stream Server v2.0
+Serves local video files via Cloudflare Named Tunnel (stream.oiotp.dev).
 Auto-converts MKV/AVI to MP4 (AAC audio) in background for browser compatibility.
 
 Zero external dependencies - uses only Python standard library.
-Requires: cloudflared, ffmpeg (both auto-detected)
+Requires: cloudflared (named tunnel configured), ffmpeg (auto-detected)
 
 Usage:
     python stream_server.py
@@ -17,14 +17,11 @@ import os
 import sys
 import re
 import signal
-import base64
 import time
 import shutil
 import threading
 import subprocess
-import urllib.request
 import urllib.parse
-import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -76,13 +73,12 @@ def load_config():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    required_keys = ["video_folder", "server_port", "github_token", "github_repo"]
+    required_keys = ["video_folder", "server_port"]
     for key in required_keys:
         if key not in config or not config[key]:
             print(f"[ERROR] Missing required config key: {key}")
             sys.exit(1)
 
-    config.setdefault("github_config_path", "docs/config.json")
     config.setdefault("supported_extensions", [".mp4", ".mkv", ".avi", ".mov", ".webm"])
     config.setdefault("browser_playable", [".mp4", ".webm"])
     config.setdefault("health_check_interval", 60)
@@ -185,7 +181,7 @@ class AutoConverter:
                 temp_path.rename(output_path)
                 print(f"[CONVERT] Done: {rel} -> {output_path.name}")
 
-                # Callback to trigger rescan + GitHub update
+                # Callback to trigger rescan
                 if self.on_conversion_done:
                     self.on_conversion_done()
             else:
@@ -436,21 +432,17 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
 # ============================================================
-# Cloudflare Tunnel Manager
+# Named Tunnel Manager
 # ============================================================
 
 class TunnelManager:
-    """Manages cloudflared tunnel lifecycle."""
+    """Manages cloudflared named tunnel lifecycle."""
 
-    def __init__(self, local_port):
-        self.local_port = local_port
+    def __init__(self, tunnel_name):
+        self.tunnel_name = tunnel_name
         self.process = None
-        self.tunnel_url = None
 
     def start(self):
-        self.tunnel_url = None
-        url_found = threading.Event()
-
         cloudflared_path = find_executable("cloudflared")
         if not cloudflared_path:
             print("[ERROR] 'cloudflared' not found!")
@@ -459,7 +451,7 @@ class TunnelManager:
 
         try:
             self.process = subprocess.Popen(
-                [cloudflared_path, "tunnel", "--url", f"http://localhost:{self.local_port}"],
+                [cloudflared_path, "tunnel", "run", self.tunnel_name],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
         except FileNotFoundError:
@@ -471,19 +463,15 @@ class TunnelManager:
                 stripped = line.strip()
                 if stripped:
                     print(f"[TUNNEL] {stripped}")
-                match = re.search(r"(https://[a-zA-Z0-9-]+\.trycloudflare\.com)", line)
-                if match:
-                    self.tunnel_url = match.group(1)
-                    url_found.set()
 
         threading.Thread(target=read_output, args=(self.process.stderr,), daemon=True).start()
         threading.Thread(target=read_output, args=(self.process.stdout,), daemon=True).start()
 
-        if not url_found.wait(timeout=30):
-            self.stop()
-            raise RuntimeError("Tunnel failed to start within 30 seconds")
+        # Give it a moment to connect
+        time.sleep(3)
 
-        return self.tunnel_url
+        if self.process.poll() is not None:
+            raise RuntimeError("Tunnel process exited immediately. Check cloudflared config.")
 
     def stop(self):
         if self.process:
@@ -500,86 +488,12 @@ class TunnelManager:
 
 
 # ============================================================
-# GitHub Updater
-# ============================================================
-
-class GitHubUpdater:
-    """Updates config.json on GitHub Pages via REST API."""
-
-    def __init__(self, token, repo, config_path):
-        self.token = token
-        self.repo = repo
-        self.config_path = config_path
-        self.api_base = "https://api.github.com"
-
-    def update_config(self, tunnel_url, video_list):
-        content = {
-            "tunnel_url": tunnel_url,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "server_status": "online",
-            "videos": video_list,
-        }
-        sha = self._get_file_sha()
-        content_json = json.dumps(content, indent=2, ensure_ascii=False)
-        content_b64 = base64.b64encode(content_json.encode("utf-8")).decode("utf-8")
-        body = {
-            "message": f"Update tunnel URL - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "content": content_b64,
-        }
-        if sha:
-            body["sha"] = sha
-
-        url = f"{self.api_base}/repos/{self.repo}/contents/{self.config_path}"
-        result = self._github_request("PUT", url, body)
-        if result is None:
-            raise RuntimeError("Failed to update GitHub config")
-        return result
-
-    def _get_file_sha(self):
-        url = f"{self.api_base}/repos/{self.repo}/contents/{self.config_path}"
-        result = self._github_request("GET", url)
-        if result and "sha" in result:
-            return result["sha"]
-        return None
-
-    def _github_request(self, method, url, data=None):
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "lowKey-Stream/1.0",
-        }
-        if data:
-            headers["Content-Type"] = "application/json"
-
-        body = json.dumps(data).encode("utf-8") if data else None
-        req = urllib.request.Request(url, data=body, headers=headers, method=method)
-
-        try:
-            with urllib.request.urlopen(req) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            elif e.code == 401:
-                print("[ERROR] GitHub authentication failed. Check your token.")
-                sys.exit(1)
-            else:
-                error_body = e.read().decode("utf-8")
-                print(f"[ERROR] GitHub API {e.code}: {error_body}")
-                return None
-        except urllib.error.URLError as e:
-            print(f"[ERROR] GitHub API network error: {e.reason}")
-            return None
-
-
-# ============================================================
 # Main Orchestrator
 # ============================================================
 
 def main():
     print("=" * 60)
-    print("  lowKey-Stream Server v1.1")
+    print("  lowKey-Stream Server v2.0")
     print("=" * 60)
     print()
 
@@ -606,22 +520,12 @@ def main():
         config["browser_playable"],
     )
 
-    # Shared state for rescan callback
-    tunnel_url_ref = [None]
-    github_ref = [None]
-
     def rescan_and_update():
         """Called after each video conversion completes."""
         videos = scanner.scan()
         StreamRequestHandler.video_list = videos
         playable = sum(1 for v in videos if v["playable"])
         print(f"[RESCAN] {len(videos)} videos ({playable} playable)")
-        if tunnel_url_ref[0] and github_ref[0]:
-            try:
-                github_ref[0].update_config(tunnel_url_ref[0], videos)
-                print("[RESCAN] GitHub config updated")
-            except Exception as e:
-                print(f"[RESCAN] GitHub update failed: {e}")
 
     # Initial scan
     print(f">> Scanning {config['video_folder']} for video files...")
@@ -650,35 +554,24 @@ def main():
     print(f"[OK] Server running at http://localhost:{config['server_port']}")
     print()
 
-    # Start tunnel
-    print(">> Starting Cloudflare tunnel...")
-    tunnel = TunnelManager(config["server_port"])
+    # Start named tunnel
+    tunnel_name = config.get("tunnel_name", "lowkey-stream")
+    print(f">> Starting Cloudflare tunnel '{tunnel_name}'...")
+    tunnel = TunnelManager(tunnel_name)
     try:
-        tunnel_url = tunnel.start()
+        tunnel.start()
     except RuntimeError as e:
         print(f"[ERROR] {e}")
         server.shutdown()
         sys.exit(1)
-    tunnel_url_ref[0] = tunnel_url
-    print(f"[OK] Tunnel active: {tunnel_url}")
-    print()
-
-    # Update GitHub
-    print(">> Updating GitHub config.json...")
-    github = GitHubUpdater(config["github_token"], config["github_repo"], config["github_config_path"])
-    github_ref[0] = github
-    try:
-        github.update_config(tunnel_url, videos)
-        print("[OK] GitHub Pages config updated successfully")
-    except Exception as e:
-        print(f"[WARN] Failed to update GitHub: {e}")
+    print(f"[OK] Tunnel started: https://stream.oiotp.dev")
     print()
 
     # Ready!
     print("=" * 60)
     print(f"  Server is LIVE!")
     print(f"  Local:  http://localhost:{config['server_port']}")
-    print(f"  Tunnel: {tunnel_url}")
+    print(f"  Tunnel: https://stream.oiotp.dev")
     if converter:
         print(f"  Auto-converting {unconverted} videos in background...")
     print(f"  Press Ctrl+C to stop.")
@@ -697,7 +590,7 @@ def main():
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, shutdown_handler)
 
-    # Main loop
+    # Main loop - periodic rescan for new files
     check_interval = config.get("health_check_interval", 60)
     while not shutdown_event.is_set():
         shutdown_event.wait(timeout=check_interval)
@@ -710,30 +603,25 @@ def main():
         if not tunnel.is_alive():
             print(f"[{timestamp}] Tunnel died! Restarting...")
             try:
-                tunnel_url = tunnel.start()
-                tunnel_url_ref[0] = tunnel_url
-                print(f"[{timestamp}] Tunnel restarted: {tunnel_url}")
-                github.update_config(tunnel_url, StreamRequestHandler.video_list)
+                tunnel.start()
+                print(f"[{timestamp}] Tunnel restarted")
             except Exception as e:
                 print(f"[{timestamp}] Failed to restart tunnel: {e}")
-        else:
-            converting = ""
-            if converter and converter.converting_now:
-                converting = f", Converting: {converter.converting_now}"
-            print(f"[HEALTH] {timestamp} - Tunnel OK, Server OK{converting}")
 
-        # Rescan for new files (converter callback also rescans, but this catches manual additions)
+        converting = ""
+        if converter and converter.converting_now:
+            converting = f", Converting: {converter.converting_now}"
+        tunnel_status = "Tunnel OK" if tunnel.is_alive() else "Tunnel DOWN"
+        print(f"[HEALTH] {timestamp} - {tunnel_status}, Server OK{converting}")
+
+        # Rescan for new files
         new_videos = scanner.scan()
         if len(new_videos) != len(videos) or any(
             n["path"] != o["path"] for n, o in zip(new_videos, videos)
         ):
             videos = new_videos
             StreamRequestHandler.video_list = videos
-            print(f"[{timestamp}] Video list changed ({len(videos)} videos), updating GitHub...")
-            try:
-                github.update_config(tunnel_url, videos)
-            except Exception as e:
-                print(f"[{timestamp}] Failed to update GitHub: {e}")
+            print(f"[{timestamp}] Video list changed ({len(videos)} videos)")
 
     # Cleanup
     if converter:
