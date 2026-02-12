@@ -548,7 +548,7 @@ def main():
     print(f">> Starting HTTP server on port {config['server_port']}...")
     StreamRequestHandler.video_list = videos
     StreamRequestHandler.video_folder = config["video_folder"]
-    server = http.server.HTTPServer(("0.0.0.0", config["server_port"]), StreamRequestHandler)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", config["server_port"]), StreamRequestHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     print(f"[OK] Server running at http://localhost:{config['server_port']}")
