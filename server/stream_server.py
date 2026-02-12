@@ -2,7 +2,7 @@
 """
 lowKey-Stream Server v2.0
 Serves local video files via Cloudflare Named Tunnel (stream.oiotp.dev).
-Auto-converts MKV/AVI to MP4 (AAC audio) in background for browser compatibility.
+Auto-converts MKV/AVI to MP4 (AAC audio) and optimizes MP4 faststart in background.
 
 Zero external dependencies - uses only Python standard library.
 Requires: cloudflared (named tunnel configured), ffmpeg (auto-detected)
@@ -118,11 +118,12 @@ class AutoConverter:
         self._stop_event.set()
 
     def _run(self):
-        """Main conversion loop - runs forever, checking for new files to convert."""
+        """Main loop - converts non-MP4 files and fixes MP4s missing faststart."""
         while not self._stop_event.is_set():
             files_to_convert = self._find_unconverted()
-            if not files_to_convert:
-                # Nothing to convert, wait and check again
+            files_to_fix = self._find_needs_faststart()
+
+            if not files_to_convert and not files_to_fix:
                 self._stop_event.wait(timeout=30)
                 continue
 
@@ -130,6 +131,11 @@ class AutoConverter:
                 if self._stop_event.is_set():
                     break
                 self._convert_one(file_path)
+
+            for file_path in files_to_fix:
+                if self._stop_event.is_set():
+                    break
+                self._fix_faststart(file_path)
 
             # After a batch, wait before rechecking
             self._stop_event.wait(timeout=30)
@@ -149,6 +155,88 @@ class AutoConverter:
             if not mp4_path.exists():
                 to_convert.append(file_path)
         return to_convert
+
+    def _find_needs_faststart(self):
+        """Find MP4 files that need moov atom moved to start for instant playback."""
+        needs_fix = []
+        for file_path in sorted(self.video_folder.rglob("*.mp4")):
+            if not file_path.is_file():
+                continue
+            if file_path.name.endswith(".mp4.tmp"):
+                continue
+            if self._needs_faststart(file_path):
+                needs_fix.append(file_path)
+        return needs_fix
+
+    def _needs_faststart(self, mp4_path):
+        """Check if MP4 has mdat before moov (needs faststart optimization)."""
+        try:
+            with open(mp4_path, "rb") as f:
+                while True:
+                    header = f.read(8)
+                    if len(header) < 8:
+                        break
+                    size = int.from_bytes(header[:4], "big")
+                    atom_type = header[4:8]
+                    if atom_type == b"moov":
+                        return False  # Already optimized
+                    if atom_type == b"mdat":
+                        return True  # Needs faststart
+                    if size == 1:  # 64-bit extended size
+                        ext = f.read(8)
+                        if len(ext) < 8:
+                            break
+                        size = int.from_bytes(ext, "big")
+                        f.seek(size - 16, 1)
+                    elif size < 8:
+                        break
+                    else:
+                        f.seek(size - 8, 1)
+        except Exception:
+            return False
+        return False
+
+    def _fix_faststart(self, mp4_path):
+        """Run ffmpeg to move moov atom to start of file (no re-encode)."""
+        rel = mp4_path.relative_to(self.video_folder)
+        temp_path = mp4_path.with_name(mp4_path.stem + ".faststart.mp4.tmp")
+
+        self.converting_now = f"faststart: {rel}"
+        print(f"[FASTSTART] Fixing: {rel}")
+
+        cmd = [
+            self.ffmpeg_path,
+            "-i", str(mp4_path),
+            "-c", "copy",
+            "-movflags", "+faststart",
+            "-y",
+            str(temp_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=3600,
+            )
+            if result.returncode == 0 and temp_path.exists():
+                mp4_path.unlink()
+                temp_path.rename(mp4_path)
+                print(f"[FASTSTART] Done: {rel}")
+                if self.on_conversion_done:
+                    self.on_conversion_done()
+            else:
+                print(f"[FASTSTART] Failed: {rel}")
+                if temp_path.exists():
+                    temp_path.unlink()
+        except subprocess.TimeoutExpired:
+            print(f"[FASTSTART] Timeout: {rel}")
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception as e:
+            print(f"[FASTSTART] Error: {rel} - {e}")
+            if temp_path.exists():
+                temp_path.unlink()
+        finally:
+            self.converting_now = None
 
     def _convert_one(self, input_path):
         """Convert a single file to MP4 (video copy + audio AAC)."""
@@ -383,8 +471,12 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(416, "Range Not Satisfiable")
                 return
 
+            MAX_CHUNK = 5 * 1024 * 1024  # 5MB per range request
             start = int(range_match.group(1))
-            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            if range_match.group(2):
+                end = int(range_match.group(2))
+            else:
+                end = min(start + MAX_CHUNK - 1, file_size - 1)
             end = min(end, file_size - 1)
 
             if start > end or start >= file_size:
@@ -508,8 +600,9 @@ def main():
     if ffmpeg_path:
         print(f"[OK] ffmpeg found: {ffmpeg_path}")
         print("     Auto-conversion enabled: MKV/AVI -> MP4 (AAC audio)")
+        print("     Auto-faststart enabled: MP4 moov atom optimization")
     else:
-        print("[WARN] ffmpeg not found - auto-conversion disabled")
+        print("[WARN] ffmpeg not found - auto-conversion and faststart disabled")
         print("       Install with: winget install Gyan.FFmpeg")
     print()
 
@@ -535,14 +628,23 @@ def main():
     print(f"[OK] Found {len(videos)} videos ({playable_count} playable, {unconverted} to convert)")
     print()
 
-    # Start auto-converter
+    # Start auto-converter (handles both MKV/AVI conversion and MP4 faststart fix)
     converter = None
-    if ffmpeg_path and unconverted > 0:
-        print(f">> Starting auto-converter ({unconverted} files queued)...")
+    if ffmpeg_path:
         converter = AutoConverter(config["video_folder"], ffmpeg_path, on_conversion_done=rescan_and_update)
-        converter.start()
-        print("[OK] Auto-converter running in background")
-        print()
+        needs_faststart = len(converter._find_needs_faststart())
+        if unconverted > 0 or needs_faststart > 0:
+            tasks = []
+            if unconverted > 0:
+                tasks.append(f"{unconverted} to convert")
+            if needs_faststart > 0:
+                tasks.append(f"{needs_faststart} to faststart")
+            print(f">> Starting auto-converter ({', '.join(tasks)})...")
+            converter.start()
+            print("[OK] Auto-converter running in background")
+            print()
+        else:
+            converter = None
 
     # Start HTTP server
     print(f">> Starting HTTP server on port {config['server_port']}...")
@@ -573,7 +675,7 @@ def main():
     print(f"  Local:  http://localhost:{config['server_port']}")
     print(f"  Tunnel: https://stream.oiotp.dev")
     if converter:
-        print(f"  Auto-converting {unconverted} videos in background...")
+        print(f"  Auto-processing videos in background...")
     print(f"  Press Ctrl+C to stop.")
     print("=" * 60)
     print()
