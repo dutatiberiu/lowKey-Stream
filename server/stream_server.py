@@ -2,7 +2,7 @@
 """
 lowKey-Stream Server v2.0
 Serves local video files via Cloudflare Named Tunnel (stream.oiotp.dev).
-Auto-converts MKV/AVI to MP4 (AAC audio) and optimizes MP4 faststart in background.
+Auto-converts MKV/AVI to MP4, optimizes faststart, and compresses high-bitrate videos in background.
 
 Zero external dependencies - uses only Python standard library.
 Requires: cloudflared (named tunnel configured), ffmpeg (auto-detected)
@@ -96,17 +96,46 @@ def load_config():
 # ============================================================
 
 class AutoConverter:
-    """Automatically converts non-browser-playable videos to MP4 in background."""
+    """Automatically converts, optimizes, and compresses videos in background."""
 
     CONVERTIBLE = {".mkv", ".avi", ".mov"}
+    MAX_BITRATE = 8_000_000    # 8 Mbps - compress if above this
+    TARGET_BITRATE = "5M"       # 5 Mbps - target for compression
 
     def __init__(self, video_folder, ffmpeg_path, on_conversion_done=None):
         self.video_folder = Path(video_folder)
         self.ffmpeg_path = ffmpeg_path
+        self.ffprobe_path = self._find_ffprobe()
         self.on_conversion_done = on_conversion_done  # callback after each conversion
         self.converting_now = None  # path of file currently being converted
         self._stop_event = threading.Event()
         self._thread = None
+
+    def _find_ffprobe(self):
+        """Find ffprobe next to ffmpeg or on PATH."""
+        ffprobe_exe = Path(self.ffmpeg_path).parent / "ffprobe.exe"
+        if ffprobe_exe.exists():
+            return str(ffprobe_exe)
+        path = shutil.which("ffprobe")
+        if path:
+            return path
+        return None
+
+    def _get_video_bitrate(self, mp4_path):
+        """Get overall bitrate in bits/sec using ffprobe."""
+        if not self.ffprobe_path:
+            return 0
+        try:
+            result = subprocess.run(
+                [self.ffprobe_path, "-v", "quiet",
+                 "-show_entries", "format=bit_rate",
+                 "-of", "csv=p=0", str(mp4_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            val = result.stdout.strip()
+            return int(val) if val and val.isdigit() else 0
+        except Exception:
+            return 0
 
     def start(self):
         """Start background conversion thread."""
@@ -118,12 +147,13 @@ class AutoConverter:
         self._stop_event.set()
 
     def _run(self):
-        """Main loop - converts non-MP4 files and fixes MP4s missing faststart."""
+        """Main loop - converts, fixes faststart, and compresses videos."""
         while not self._stop_event.is_set():
             files_to_convert = self._find_unconverted()
             files_to_fix = self._find_needs_faststart()
+            files_to_compress = self._find_needs_compression()
 
-            if not files_to_convert and not files_to_fix:
+            if not files_to_convert and not files_to_fix and not files_to_compress:
                 self._stop_event.wait(timeout=30)
                 continue
 
@@ -136,6 +166,11 @@ class AutoConverter:
                 if self._stop_event.is_set():
                     break
                 self._fix_faststart(file_path)
+
+            for file_path in files_to_compress:
+                if self._stop_event.is_set():
+                    break
+                self._compress_video(file_path)
 
             # After a batch, wait before rechecking
             self._stop_event.wait(timeout=30)
@@ -233,6 +268,73 @@ class AutoConverter:
                 temp_path.unlink()
         except Exception as e:
             print(f"[FASTSTART] Error: {rel} - {e}")
+            if temp_path.exists():
+                temp_path.unlink()
+        finally:
+            self.converting_now = None
+
+    def _find_needs_compression(self):
+        """Find MP4 files with bitrate above MAX_BITRATE."""
+        needs_compress = []
+        for file_path in sorted(self.video_folder.rglob("*.mp4")):
+            if not file_path.is_file():
+                continue
+            if file_path.name.endswith(".mp4.tmp"):
+                continue
+            bitrate = self._get_video_bitrate(file_path)
+            if bitrate > self.MAX_BITRATE:
+                needs_compress.append(file_path)
+        return needs_compress
+
+    def _compress_video(self, mp4_path):
+        """Re-encode video to target bitrate for smooth streaming."""
+        rel = mp4_path.relative_to(self.video_folder)
+        temp_path = mp4_path.with_name(mp4_path.stem + ".compressed.mp4.tmp")
+        size_before = mp4_path.stat().st_size
+        bitrate = self._get_video_bitrate(mp4_path)
+
+        self.converting_now = f"compress: {rel}"
+        print(f"[COMPRESS] Starting: {rel} ({bitrate / 1_000_000:.1f} Mbps -> {self.TARGET_BITRATE}bps)")
+
+        cmd = [
+            self.ffmpeg_path,
+            "-i", str(mp4_path),
+            "-c:v", "libx264",
+            "-b:v", self.TARGET_BITRATE,
+            "-preset", "medium",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            "-y",
+            str(temp_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=14400,  # 4 hours max per file
+            )
+            if result.returncode == 0 and temp_path.exists():
+                size_after = temp_path.stat().st_size
+                saved = (1 - size_after / size_before) * 100
+                mp4_path.unlink()
+                temp_path.rename(mp4_path)
+                print(f"[COMPRESS] Done: {rel} ({size_before / 1024**3:.2f} GB -> {size_after / 1024**3:.2f} GB, {saved:.0f}% smaller)")
+                if self.on_conversion_done:
+                    self.on_conversion_done()
+            else:
+                print(f"[COMPRESS] Failed: {rel}")
+                errors = result.stderr.strip().split("\n")[-2:]
+                for line in errors:
+                    print(f"           {line}")
+                if temp_path.exists():
+                    temp_path.unlink()
+        except subprocess.TimeoutExpired:
+            print(f"[COMPRESS] Timeout: {rel} (took >4 hours)")
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception as e:
+            print(f"[COMPRESS] Error: {rel} - {e}")
             if temp_path.exists():
                 temp_path.unlink()
         finally:
@@ -471,12 +573,8 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(416, "Range Not Satisfiable")
                 return
 
-            MAX_CHUNK = 5 * 1024 * 1024  # 5MB per range request
             start = int(range_match.group(1))
-            if range_match.group(2):
-                end = int(range_match.group(2))
-            else:
-                end = min(start + MAX_CHUNK - 1, file_size - 1)
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
             end = min(end, file_size - 1)
 
             if start > end or start >= file_size:
@@ -507,7 +605,7 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._stream_file(full_path, 0, file_size)
 
     def _stream_file(self, file_path, start, length):
-        BLOCK_SIZE = 65536
+        BLOCK_SIZE = 1024 * 1024  # 1MB blocks for faster streaming
         try:
             with open(file_path, "rb") as f:
                 f.seek(start)
@@ -599,8 +697,9 @@ def main():
     ffmpeg_path = find_executable("ffmpeg")
     if ffmpeg_path:
         print(f"[OK] ffmpeg found: {ffmpeg_path}")
-        print("     Auto-conversion enabled: MKV/AVI -> MP4 (AAC audio)")
-        print("     Auto-faststart enabled: MP4 moov atom optimization")
+        print("     Auto-conversion: MKV/AVI -> MP4 (AAC audio)")
+        print("     Auto-faststart: MP4 moov atom optimization")
+        print("     Auto-compress:  High-bitrate MP4s -> 5 Mbps for streaming")
     else:
         print("[WARN] ffmpeg not found - auto-conversion and faststart disabled")
         print("       Install with: winget install Gyan.FFmpeg")
@@ -633,12 +732,15 @@ def main():
     if ffmpeg_path:
         converter = AutoConverter(config["video_folder"], ffmpeg_path, on_conversion_done=rescan_and_update)
         needs_faststart = len(converter._find_needs_faststart())
-        if unconverted > 0 or needs_faststart > 0:
+        needs_compress = len(converter._find_needs_compression())
+        if unconverted > 0 or needs_faststart > 0 or needs_compress > 0:
             tasks = []
             if unconverted > 0:
                 tasks.append(f"{unconverted} to convert")
             if needs_faststart > 0:
                 tasks.append(f"{needs_faststart} to faststart")
+            if needs_compress > 0:
+                tasks.append(f"{needs_compress} to compress")
             print(f">> Starting auto-converter ({', '.join(tasks)})...")
             converter.start()
             print("[OK] Auto-converter running in background")
