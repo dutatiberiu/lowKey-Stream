@@ -99,8 +99,8 @@ class AutoConverter:
     """Automatically converts, optimizes, and compresses videos in background."""
 
     CONVERTIBLE = {".mkv", ".avi", ".mov"}
-    MAX_BITRATE = 8_000_000    # 8 Mbps - compress if above this
-    TARGET_BITRATE = "5M"       # 5 Mbps - target for compression
+    MAX_BITRATE = 4_000_000    # 4 Mbps - compress if above this
+    TARGET_BITRATE = "3M"       # 3 Mbps - smooth streaming through tunnel
 
     def __init__(self, video_folder, ffmpeg_path, on_conversion_done=None):
         self.video_folder = Path(video_folder)
