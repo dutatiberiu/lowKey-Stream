@@ -303,6 +303,7 @@ class AutoConverter:
             "-b:v", self.TARGET_BITRATE,
             "-preset", "medium",
             "-c:a", "aac",
+            "-ac", "2",
             "-b:a", "192k",
             "-movflags", "+faststart",
             "-y",

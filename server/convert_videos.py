@@ -112,6 +112,7 @@ def compress_file(ffmpeg_path, input_path, output_path):
         "-b:v", TARGET_BITRATE,
         "-preset", "medium",
         "-c:a", "aac",
+        "-ac", "2",
         "-b:a", "192k",
         "-movflags", "+faststart",
         "-y",
@@ -126,9 +127,15 @@ def compress_file(ffmpeg_path, input_path, output_path):
         return True
     else:
         print("FAILED")
-        errors = result.stderr.strip().split("\n")[-3:]
-        for line in errors:
-            print(f"    {line}")
+        # Show error lines from stderr
+        error_lines = [l for l in result.stderr.strip().split("\n") if "error" in l.lower() or "Error" in l]
+        if error_lines:
+            for line in error_lines:
+                print(f"    {line.strip()}")
+        else:
+            # Show last 5 lines if no explicit error found
+            for line in result.stderr.strip().split("\n")[-5:]:
+                print(f"    {line.strip()}")
         return False
 
 
