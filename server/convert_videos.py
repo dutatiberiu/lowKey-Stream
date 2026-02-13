@@ -301,7 +301,7 @@ def main():
         size_before = file_path.stat().st_size
         print(f"[{i}/{len(files_to_compress)}] {rel} ({bitrate / 1_000_000:.1f} Mbps)")
 
-        temp_path = file_path.with_name(file_path.stem + ".compressed.mp4.tmp")
+        temp_path = file_path.with_name("_compress_temp.mp4")
 
         if compress_file(ffmpeg_path, file_path, temp_path):
             size_after = temp_path.stat().st_size

@@ -234,7 +234,7 @@ class AutoConverter:
     def _fix_faststart(self, mp4_path):
         """Run ffmpeg to move moov atom to start of file (no re-encode)."""
         rel = mp4_path.relative_to(self.video_folder)
-        temp_path = mp4_path.with_name(mp4_path.stem + ".faststart.mp4.tmp")
+        temp_path = mp4_path.with_name("_faststart_temp.mp4")
 
         self.converting_now = f"faststart: {rel}"
         print(f"[FASTSTART] Fixing: {rel}")
@@ -289,7 +289,7 @@ class AutoConverter:
     def _compress_video(self, mp4_path):
         """Re-encode video to target bitrate for smooth streaming."""
         rel = mp4_path.relative_to(self.video_folder)
-        temp_path = mp4_path.with_name(mp4_path.stem + ".compressed.mp4.tmp")
+        temp_path = mp4_path.with_name("_compress_temp.mp4")
         size_before = mp4_path.stat().st_size
         bitrate = self._get_video_bitrate(mp4_path)
 
