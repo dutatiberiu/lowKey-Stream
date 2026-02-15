@@ -528,6 +528,15 @@ body {
     font-size: 10px;
 }
 
+.meta-subs {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.15);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 10px;
+}
+
 /* Empty state */
 .empty-state {
     display: flex;

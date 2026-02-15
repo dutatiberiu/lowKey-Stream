@@ -147,13 +147,14 @@ class AutoConverter:
         self._stop_event.set()
 
     def _run(self):
-        """Main loop - converts, fixes faststart, and compresses videos."""
+        """Main loop - converts, fixes faststart, compresses, and extracts subtitles."""
         while not self._stop_event.is_set():
             files_to_convert = self._find_unconverted()
             files_to_fix = self._find_needs_faststart()
             files_to_compress = self._find_needs_compression()
+            subs_to_extract = self._find_needs_subtitle_extract()
 
-            if not files_to_convert and not files_to_fix and not files_to_compress:
+            if not files_to_convert and not files_to_fix and not files_to_compress and not subs_to_extract:
                 self._stop_event.wait(timeout=30)
                 continue
 
@@ -171,6 +172,11 @@ class AutoConverter:
                 if self._stop_event.is_set():
                     break
                 self._compress_video(file_path)
+
+            for file_path in subs_to_extract:
+                if self._stop_event.is_set():
+                    break
+                self._extract_subtitles(file_path)
 
             # After a batch, wait before rechecking
             self._stop_event.wait(timeout=30)
@@ -341,6 +347,116 @@ class AutoConverter:
         finally:
             self.converting_now = None
 
+    def _find_needs_subtitle_extract(self):
+        """Find videos that have subtitles needing extraction/conversion to VTT."""
+        needs_extract = []
+        for ext in ["*.mp4", "*.mkv", "*.avi"]:
+            for file_path in sorted(self.video_folder.rglob(ext)):
+                if not file_path.is_file() or ".bak" in str(file_path) or file_path.name.startswith("_"):
+                    continue
+                # Check for external .srt without corresponding .vtt
+                srt_path = file_path.with_suffix(".srt")
+                vtt_path = file_path.with_suffix(".vtt")
+                if srt_path.exists() and not vtt_path.exists():
+                    needs_extract.append(("srt", file_path, srt_path))
+                    continue
+                # Check for embedded subtitles (only if no .vtt exists yet)
+                if not vtt_path.exists() and self.ffprobe_path:
+                    embedded = self._get_subtitle_streams(file_path)
+                    if embedded:
+                        needs_extract.append(("embedded", file_path, embedded))
+        return needs_extract
+
+    def _get_subtitle_streams(self, video_path):
+        """Get list of text-based subtitle streams from a video file."""
+        if not self.ffprobe_path:
+            return []
+        try:
+            result = subprocess.run(
+                [self.ffprobe_path, "-v", "quiet", "-select_streams", "s",
+                 "-show_entries", "stream=index,codec_name:stream_tags=language,title",
+                 "-of", "json", str(video_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            data = json.loads(result.stdout)
+            streams = []
+            text_codecs = {"srt", "subrip", "ass", "ssa", "mov_text", "webvtt"}
+            for s in data.get("streams", []):
+                codec = s.get("codec_name", "")
+                if codec in text_codecs:
+                    tags = s.get("tags", {})
+                    streams.append({
+                        "index": s["index"],
+                        "codec": codec,
+                        "lang": tags.get("language", "und"),
+                        "title": tags.get("title", ""),
+                    })
+            return streams
+        except Exception:
+            return []
+
+    def _extract_subtitles(self, sub_info):
+        """Extract or convert subtitles to VTT format."""
+        sub_type, video_path, source = sub_info
+        rel = video_path.relative_to(self.video_folder)
+
+        if sub_type == "srt":
+            # Convert external .srt to .vtt
+            srt_path = source
+            vtt_path = video_path.with_suffix(".vtt")
+            self.converting_now = f"subs: {rel}"
+            print(f"[SUBS] Converting SRT -> VTT: {rel}")
+            try:
+                self._srt_to_vtt(srt_path, vtt_path)
+                print(f"[SUBS] Done: {vtt_path.name}")
+            except Exception as e:
+                print(f"[SUBS] Error: {rel} - {e}")
+            finally:
+                self.converting_now = None
+
+        elif sub_type == "embedded":
+            # Extract first text subtitle stream to .vtt
+            streams = source
+            stream = streams[0]  # Take the first one
+            vtt_path = video_path.with_suffix(".vtt")
+            self.converting_now = f"subs: {rel}"
+            lang = stream["lang"]
+            print(f"[SUBS] Extracting embedded sub ({lang}): {rel}")
+
+            cmd = [
+                self.ffmpeg_path,
+                "-i", str(video_path),
+                "-map", f"0:{stream['index']}",
+                "-c:s", "webvtt",
+                "-y",
+                str(vtt_path),
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                if result.returncode == 0 and vtt_path.exists():
+                    print(f"[SUBS] Done: {vtt_path.name}")
+                else:
+                    print(f"[SUBS] Failed: {rel}")
+                    if vtt_path.exists():
+                        vtt_path.unlink()
+            except Exception as e:
+                print(f"[SUBS] Error: {rel} - {e}")
+                if vtt_path.exists():
+                    vtt_path.unlink()
+            finally:
+                self.converting_now = None
+
+    @staticmethod
+    def _srt_to_vtt(srt_path, vtt_path):
+        """Convert SRT subtitle file to WebVTT format."""
+        with open(srt_path, "r", encoding="utf-8-sig") as f:
+            content = f.read()
+        # WebVTT uses . instead of , for milliseconds
+        content = content.replace(",", ".")
+        with open(vtt_path, "w", encoding="utf-8") as f:
+            f.write("WEBVTT\n\n")
+            f.write(content)
+
     def _convert_one(self, input_path):
         """Convert a single file to MP4 (video copy + audio AAC)."""
         rel = input_path.relative_to(self.video_folder)
@@ -448,6 +564,11 @@ class VideoScanner:
             folder = parts[0] if len(parts) > 1 else ""
             size = file_path.stat().st_size
 
+            # Check for subtitle file (.vtt)
+            vtt_path = file_path.with_suffix(".vtt")
+            has_subs = vtt_path.exists()
+            sub_path = str(vtt_path.relative_to(self.video_folder)).replace("\\", "/") if has_subs else None
+
             videos.append({
                 "name": file_path.stem,
                 "filename": file_path.name,
@@ -457,6 +578,7 @@ class VideoScanner:
                 "extension": ext,
                 "playable": ext in self.browser_playable,
                 "folder": folder,
+                "subtitles": sub_path,
             })
 
         return videos
@@ -516,6 +638,9 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/video/"):
             relative_path = path[7:]
             self._handle_video_stream(relative_path, head_only)
+        elif path.startswith("/subs/"):
+            relative_path = path[6:]
+            self._handle_subtitle(relative_path, head_only)
         else:
             self.send_error(404, "Not Found")
 
@@ -544,6 +669,26 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if not head_only:
             self.wfile.write(body)
+
+    def _handle_subtitle(self, relative_path, head_only=False):
+        video_folder = Path(self.video_folder).resolve()
+        full_path = (video_folder / relative_path).resolve()
+
+        if not str(full_path).startswith(str(video_folder)):
+            self.send_error(403, "Forbidden")
+            return
+        if not full_path.exists() or full_path.suffix.lower() != ".vtt":
+            self.send_error(404, "Subtitle not found")
+            return
+
+        content = full_path.read_bytes()
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "text/vtt; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(content)
 
     def _handle_video_stream(self, relative_path, head_only=False):
         video_folder = Path(self.video_folder).resolve()
@@ -700,7 +845,8 @@ def main():
         print(f"[OK] ffmpeg found: {ffmpeg_path}")
         print("     Auto-conversion: MKV/AVI -> MP4 (AAC audio)")
         print("     Auto-faststart: MP4 moov atom optimization")
-        print("     Auto-compress:  High-bitrate MP4s -> 5 Mbps for streaming")
+        print("     Auto-compress:  High-bitrate MP4s -> 3 Mbps for streaming")
+        print("     Auto-subs:      Extract/convert subtitles to WebVTT")
     else:
         print("[WARN] ffmpeg not found - auto-conversion and faststart disabled")
         print("       Install with: winget install Gyan.FFmpeg")
@@ -734,7 +880,8 @@ def main():
         converter = AutoConverter(config["video_folder"], ffmpeg_path, on_conversion_done=rescan_and_update)
         needs_faststart = len(converter._find_needs_faststart())
         needs_compress = len(converter._find_needs_compression())
-        if unconverted > 0 or needs_faststart > 0 or needs_compress > 0:
+        needs_subs = len(converter._find_needs_subtitle_extract())
+        if unconverted > 0 or needs_faststart > 0 or needs_compress > 0 or needs_subs > 0:
             tasks = []
             if unconverted > 0:
                 tasks.append(f"{unconverted} to convert")
@@ -742,6 +889,8 @@ def main():
                 tasks.append(f"{needs_faststart} to faststart")
             if needs_compress > 0:
                 tasks.append(f"{needs_compress} to compress")
+            if needs_subs > 0:
+                tasks.append(f"{needs_subs} subs to extract")
             print(f">> Starting auto-converter ({', '.join(tasks)})...")
             converter.start()
             print("[OK] Auto-converter running in background")

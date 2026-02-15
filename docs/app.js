@@ -184,6 +184,7 @@ function renderVideoList() {
         const playableClass = video.playable ? '' : 'not-playable';
         const warningBadge = video.playable ? '' : '<span class="badge-warning" title="May not play in browser">!</span>';
         const extBadge = video.extension.replace('.', '').toUpperCase();
+        const subsBadge = video.subtitles ? '<span class="meta-subs" title="Subtitles available">CC</span>' : '';
 
         return `
             <div class="video-item ${isActive ? 'active' : ''} ${playableClass}"
@@ -200,6 +201,7 @@ function renderVideoList() {
                         <span class="meta-folder">${video.folder || 'Root'}</span>
                         <span class="meta-size">${video.size_display}</span>
                         <span class="meta-ext">${extBadge}</span>
+                        ${subsBadge}
                     </div>
                 </div>
             </div>`;
@@ -227,11 +229,37 @@ function playVideo(index) {
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
     const videoUrl = `${state.tunnelUrl}/video/${encodedPath}`;
 
+    // Remove existing subtitle tracks
+    videoPlayer.querySelectorAll('track').forEach(t => t.remove());
+
     videoPlayer.src = videoUrl;
+
+    // Add subtitle track if available
+    if (video.subtitles) {
+        const subUrl = `${state.tunnelUrl}/subs/${video.subtitles}`;
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.src = subUrl;
+        track.srclang = 'en';
+        track.label = 'Subtitles';
+        track.default = true;
+        videoPlayer.appendChild(track);
+    }
+
     videoPlayer.load();
     videoPlayer.play().catch(err => {
         console.error('Playback error:', err);
     });
+
+    // Enable subtitle track after load
+    if (video.subtitles) {
+        videoPlayer.addEventListener('loadedmetadata', function enableSubs() {
+            if (videoPlayer.textTracks.length > 0) {
+                videoPlayer.textTracks[0].mode = 'showing';
+            }
+            videoPlayer.removeEventListener('loadedmetadata', enableSubs);
+        });
+    }
 
     // Update UI
     videoOverlay.classList.add('hidden');
