@@ -365,6 +365,21 @@ class AutoConverter:
                     embedded = self._get_subtitle_streams(file_path)
                     if embedded:
                         needs_extract.append(("embedded", file_path, embedded))
+
+        # Scan .mkv.bak files - recover subtitles from originals before conversion
+        if self.ffprobe_path:
+            for bak_path in sorted(self.video_folder.rglob("*.mkv.bak")):
+                if not bak_path.is_file():
+                    continue
+                # filename.mkv.bak -> filename.vtt
+                base_name = bak_path.name.replace(".mkv.bak", "")
+                vtt_path = bak_path.with_name(base_name + ".vtt")
+                mp4_path = bak_path.with_name(base_name + ".mp4")
+                if mp4_path.exists() and not vtt_path.exists():
+                    embedded = self._get_subtitle_streams(bak_path)
+                    if embedded:
+                        needs_extract.append(("embedded_bak", bak_path, embedded, vtt_path))
+
         return needs_extract
 
     def _get_subtitle_streams(self, video_path):
@@ -397,7 +412,9 @@ class AutoConverter:
 
     def _extract_subtitles(self, sub_info):
         """Extract or convert subtitles to VTT format."""
-        sub_type, video_path, source = sub_info
+        sub_type = sub_info[0]
+        video_path = sub_info[1]
+        source = sub_info[2]
         rel = video_path.relative_to(self.video_folder)
 
         if sub_type == "srt":
@@ -446,6 +463,38 @@ class AutoConverter:
             finally:
                 self.converting_now = None
 
+        elif sub_type == "embedded_bak":
+            # Extract subtitles from .mkv.bak (originals before conversion)
+            streams = source
+            vtt_path = sub_info[3]  # custom output path for .bak recovery
+            stream = streams[0]
+            self.converting_now = f"subs (bak): {rel}"
+            lang = stream["lang"]
+            print(f"[SUBS] Recovering from .bak ({lang}): {rel}")
+
+            cmd = [
+                self.ffmpeg_path,
+                "-i", str(video_path),
+                "-map", f"0:{stream['index']}",
+                "-c:s", "webvtt",
+                "-y",
+                str(vtt_path),
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                if result.returncode == 0 and vtt_path.exists():
+                    print(f"[SUBS] Recovered: {vtt_path.name}")
+                else:
+                    print(f"[SUBS] Recovery failed: {rel} (non-text codec?)")
+                    if vtt_path.exists():
+                        vtt_path.unlink()
+            except Exception as e:
+                print(f"[SUBS] Error: {rel} - {e}")
+                if vtt_path.exists():
+                    vtt_path.unlink()
+            finally:
+                self.converting_now = None
+
     @staticmethod
     def _srt_to_vtt(srt_path, vtt_path):
         """Convert SRT subtitle file to WebVTT format."""
@@ -464,6 +513,34 @@ class AutoConverter:
         temp_path = input_path.with_suffix(".mp4.tmp")
 
         self.converting_now = str(rel)
+
+        # Extract subtitles BEFORE conversion (they'll be lost in MP4)
+        vtt_path = input_path.with_suffix(".vtt")
+        if not vtt_path.exists():
+            embedded = self._get_subtitle_streams(input_path)
+            if embedded:
+                stream = embedded[0]
+                lang = stream["lang"]
+                print(f"[CONVERT] Extracting subs ({lang}) from: {rel}")
+                sub_cmd = [
+                    self.ffmpeg_path,
+                    "-i", str(input_path),
+                    "-map", f"0:{stream['index']}",
+                    "-c:s", "webvtt",
+                    "-y", str(vtt_path),
+                ]
+                try:
+                    sub_result = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=120)
+                    if sub_result.returncode == 0 and vtt_path.exists():
+                        print(f"[CONVERT] Subs extracted: {vtt_path.name}")
+                    else:
+                        print(f"[CONVERT] Subs extraction failed (non-text codec?)")
+                        if vtt_path.exists():
+                            vtt_path.unlink()
+                except Exception:
+                    if vtt_path.exists():
+                        vtt_path.unlink()
+
         print(f"[CONVERT] Starting: {rel}")
 
         cmd = [

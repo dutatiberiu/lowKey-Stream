@@ -139,6 +139,58 @@ def compress_file(ffmpeg_path, input_path, output_path):
         return False
 
 
+def extract_subtitles(ffmpeg_path, ffprobe_path, input_path):
+    """Extract embedded text subtitles from video to .vtt before conversion."""
+    if not ffprobe_path:
+        return
+    vtt_path = input_path.with_suffix(".vtt")
+    if vtt_path.exists():
+        return
+
+    # Check for text subtitle streams
+    try:
+        result = subprocess.run(
+            [ffprobe_path, "-v", "quiet", "-select_streams", "s",
+             "-show_entries", "stream=index,codec_name:stream_tags=language",
+             "-of", "json", str(input_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(result.stdout)
+        text_codecs = {"srt", "subrip", "ass", "ssa", "mov_text", "webvtt"}
+        streams = []
+        for s in data.get("streams", []):
+            if s.get("codec_name", "") in text_codecs:
+                streams.append(s)
+        if not streams:
+            return
+    except Exception:
+        return
+
+    stream = streams[0]
+    lang = stream.get("tags", {}).get("language", "?")
+    print(f"    Extracting subtitles ({lang})... ", end="", flush=True)
+
+    cmd = [
+        ffmpeg_path,
+        "-i", str(input_path),
+        "-map", f"0:{stream['index']}",
+        "-c:s", "webvtt",
+        "-y", str(vtt_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0 and vtt_path.exists():
+            print("OK")
+        else:
+            print("FAILED (non-text codec?)")
+            if vtt_path.exists():
+                vtt_path.unlink()
+    except Exception:
+        print("FAILED")
+        if vtt_path.exists():
+            vtt_path.unlink()
+
+
 def convert_file(ffmpeg_path, input_path, output_path):
     """Convert video: copy video stream, re-encode audio to AAC."""
     cmd = [
@@ -234,6 +286,9 @@ def main():
                 print(f"[{i}/{len(files_to_convert)}] {rel}")
 
                 mp4_path = file_path.with_suffix(".mp4")
+
+                # Extract subtitles before conversion (they'll be lost in MP4)
+                extract_subtitles(ffmpeg_path, ffprobe_path, file_path)
 
                 if convert_file(ffmpeg_path, file_path, mp4_path):
                     bak_path = file_path.with_suffix(file_path.suffix + ".bak")
