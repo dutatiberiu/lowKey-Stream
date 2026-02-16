@@ -234,7 +234,7 @@ function playVideo(index) {
 
     videoPlayer.src = videoUrl;
 
-    // Add subtitle track if available
+    // Add subtitle track if available (must be added BEFORE load)
     if (video.subtitles) {
         const subUrl = `${state.tunnelUrl}/subs/${video.subtitles}`;
         const track = document.createElement('track');
@@ -244,15 +244,8 @@ function playVideo(index) {
         track.label = 'Subtitles';
         track.default = true;
         videoPlayer.appendChild(track);
-    }
 
-    videoPlayer.load();
-    videoPlayer.play().catch(err => {
-        console.error('Playback error:', err);
-    });
-
-    // Enable subtitle track after load
-    if (video.subtitles) {
+        // Enable subtitle track after metadata loads
         videoPlayer.addEventListener('loadedmetadata', function enableSubs() {
             if (videoPlayer.textTracks.length > 0) {
                 videoPlayer.textTracks[0].mode = 'showing';
@@ -260,6 +253,11 @@ function playVideo(index) {
             videoPlayer.removeEventListener('loadedmetadata', enableSubs);
         });
     }
+
+    videoPlayer.load();
+    videoPlayer.play().catch(err => {
+        console.error('Playback error:', err);
+    });
 
     // Update UI
     videoOverlay.classList.add('hidden');
