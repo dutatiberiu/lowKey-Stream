@@ -140,18 +140,19 @@ def compress_file(ffmpeg_path, input_path, output_path):
 
 
 def extract_subtitles(ffmpeg_path, ffprobe_path, input_path):
-    """Extract embedded text subtitles from video to .vtt before conversion."""
+    """Extract ALL embedded text subtitles from video to lang-coded .vtt files.
+
+    Creates files like: movie.en.vtt, movie.ro.vtt, movie.es.vtt
+    """
     if not ffprobe_path:
         return
-    vtt_path = input_path.with_suffix(".vtt")
-    if vtt_path.exists():
-        return
+    import re as _re
 
     # Check for text subtitle streams
     try:
         result = subprocess.run(
             [ffprobe_path, "-v", "quiet", "-select_streams", "s",
-             "-show_entries", "stream=index,codec_name:stream_tags=language",
+             "-show_entries", "stream=index,codec_name:stream_tags=language,title",
              "-of", "json", str(input_path)],
             capture_output=True, text=True, timeout=30,
         )
@@ -160,35 +161,55 @@ def extract_subtitles(ffmpeg_path, ffprobe_path, input_path):
         streams = []
         for s in data.get("streams", []):
             if s.get("codec_name", "") in text_codecs:
-                streams.append(s)
+                tags = s.get("tags", {})
+                streams.append({
+                    "index": s["index"],
+                    "lang": tags.get("language", "und"),
+                    "title": tags.get("title", ""),
+                })
         if not streams:
             return
     except Exception:
         return
 
-    stream = streams[0]
-    lang = stream.get("tags", {}).get("language", "?")
-    print(f"    Extracting subtitles ({lang})... ", end="", flush=True)
+    extracted = 0
+    for stream in streams:
+        lang = stream["lang"]
+        title = stream.get("title", "")
+        # Build suffix: lang or lang_Title for duplicates
+        suffix = lang
+        if title and any(s["lang"] == lang for s in streams if s is not stream):
+            safe_title = _re.sub(r"[^\w]", "", title)[:10]
+            suffix = f"{lang}_{safe_title}" if safe_title else lang
 
-    cmd = [
-        ffmpeg_path,
-        "-i", str(input_path),
-        "-map", f"0:{stream['index']}",
-        "-c:s", "webvtt",
-        "-y", str(vtt_path),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode == 0 and vtt_path.exists():
-            print("OK")
-        else:
-            print("FAILED (non-text codec?)")
+        vtt_path = input_path.with_suffix(f".{suffix}.vtt")
+        if vtt_path.exists():
+            continue
+
+        print(f"    Extracting subs [{suffix}]... ", end="", flush=True)
+        cmd = [
+            ffmpeg_path,
+            "-i", str(input_path),
+            "-map", f"0:{stream['index']}",
+            "-c:s", "webvtt",
+            "-y", str(vtt_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and vtt_path.exists():
+                print("OK")
+                extracted += 1
+            else:
+                print("FAILED")
+                if vtt_path.exists():
+                    vtt_path.unlink()
+        except Exception:
+            print("FAILED")
             if vtt_path.exists():
                 vtt_path.unlink()
-    except Exception:
-        print("FAILED")
-        if vtt_path.exists():
-            vtt_path.unlink()
+
+    if extracted > 0:
+        print(f"    Extracted {extracted} subtitle track(s)")
 
 
 def convert_file(ffmpeg_path, input_path, output_path):

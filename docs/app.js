@@ -184,7 +184,9 @@ function renderVideoList() {
         const playableClass = video.playable ? '' : 'not-playable';
         const warningBadge = video.playable ? '' : '<span class="badge-warning" title="May not play in browser">!</span>';
         const extBadge = video.extension.replace('.', '').toUpperCase();
-        const subsBadge = video.subtitles ? '<span class="meta-subs" title="Subtitles available">CC</span>' : '';
+        const subsBadge = video.subtitles && video.subtitles.length > 0
+            ? `<span class="meta-subs" title="${video.subtitles.map(s => s.label).join(', ')}">CC ${video.subtitles.length > 1 ? video.subtitles.length : ''}</span>`
+            : '';
 
         return `
             <div class="video-item ${isActive ? 'active' : ''} ${playableClass}"
@@ -234,18 +236,19 @@ function playVideo(index) {
 
     videoPlayer.src = videoUrl;
 
-    // Add subtitle track if available (must be added BEFORE load)
-    if (video.subtitles) {
-        const subUrl = `${state.tunnelUrl}/subs/${video.subtitles}`;
-        const track = document.createElement('track');
-        track.kind = 'subtitles';
-        track.src = subUrl;
-        track.srclang = 'en';
-        track.label = 'Subtitles';
-        track.default = true;
-        videoPlayer.appendChild(track);
+    // Add subtitle tracks if available (must be added BEFORE load)
+    if (video.subtitles && video.subtitles.length > 0) {
+        video.subtitles.forEach((sub, i) => {
+            const track = document.createElement('track');
+            track.kind = 'subtitles';
+            track.src = `${state.tunnelUrl}/subs/${sub.path}`;
+            track.srclang = sub.lang || 'en';
+            track.label = sub.label || sub.lang || 'Subtitles';
+            if (i === 0) track.default = true;
+            videoPlayer.appendChild(track);
+        });
 
-        // Enable subtitle track after metadata loads
+        // Enable first subtitle track after metadata loads
         videoPlayer.addEventListener('loadedmetadata', function enableSubs() {
             if (videoPlayer.textTracks.length > 0) {
                 videoPlayer.textTracks[0].mode = 'showing';

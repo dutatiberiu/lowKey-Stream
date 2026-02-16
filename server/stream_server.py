@@ -348,8 +348,27 @@ class AutoConverter:
             self.converting_now = None
 
     def _find_needs_subtitle_extract(self):
-        """Find videos that have subtitles needing extraction/conversion to VTT."""
+        """Find videos that need multi-language subtitle extraction to VTT.
+
+        Extracts ALL text subtitle streams as separate lang-coded files:
+        e.g. movie.en.vtt, movie.ro.vtt, movie.es.vtt
+        """
         needs_extract = []
+
+        # Helper: check which languages are already extracted for a video stem
+        def _existing_langs(base_path):
+            """Return set of language codes already extracted as .lang.vtt files."""
+            langs = set()
+            for vtt in base_path.parent.glob(base_path.stem + ".*.vtt"):
+                # filename.en.vtt -> "en"
+                parts = vtt.stem.rsplit(".", 1)
+                if len(parts) == 2:
+                    langs.add(parts[1])
+            # Also count old-style .vtt (no lang code) as extracted
+            if base_path.with_suffix(".vtt").exists():
+                langs.add("_old")
+            return langs
+
         for ext in ["*.mp4", "*.mkv", "*.avi"]:
             for file_path in sorted(self.video_folder.rglob(ext)):
                 if not file_path.is_file() or ".bak" in str(file_path) or file_path.name.startswith("_"):
@@ -360,25 +379,29 @@ class AutoConverter:
                 if srt_path.exists() and not vtt_path.exists():
                     needs_extract.append(("srt", file_path, srt_path))
                     continue
-                # Check for embedded subtitles (only if no .vtt exists yet)
-                if not vtt_path.exists() and self.ffprobe_path:
+                # Check for embedded subtitles - extract all languages not yet done
+                if self.ffprobe_path:
                     embedded = self._get_subtitle_streams(file_path)
                     if embedded:
-                        needs_extract.append(("embedded", file_path, embedded))
+                        existing = _existing_langs(file_path)
+                        missing = [s for s in embedded if s["lang"] not in existing]
+                        if missing:
+                            needs_extract.append(("embedded_multi", file_path, missing))
 
         # Scan .mkv.bak files - recover subtitles from originals before conversion
         if self.ffprobe_path:
             for bak_path in sorted(self.video_folder.rglob("*.mkv.bak")):
                 if not bak_path.is_file():
                     continue
-                # filename.mkv.bak -> filename.vtt
                 base_name = bak_path.name.replace(".mkv.bak", "")
-                vtt_path = bak_path.with_name(base_name + ".vtt")
                 mp4_path = bak_path.with_name(base_name + ".mp4")
-                if mp4_path.exists() and not vtt_path.exists():
+                if mp4_path.exists():
+                    existing = _existing_langs(mp4_path)
                     embedded = self._get_subtitle_streams(bak_path)
                     if embedded:
-                        needs_extract.append(("embedded_bak", bak_path, embedded, vtt_path))
+                        missing = [s for s in embedded if s["lang"] not in existing]
+                        if missing:
+                            needs_extract.append(("embedded_multi", bak_path, missing, mp4_path))
 
         return needs_extract
 
@@ -410,15 +433,34 @@ class AutoConverter:
         except Exception:
             return []
 
+    # ISO 639-2/B to display name mapping for subtitle labels
+    LANG_NAMES = {
+        "eng": "English", "rum": "Romanian", "ron": "Romanian",
+        "spa": "Spanish", "fre": "French", "fra": "French",
+        "ger": "German", "deu": "German", "ita": "Italian",
+        "por": "Portuguese", "dut": "Dutch", "nld": "Dutch",
+        "pol": "Polish", "hun": "Hungarian", "cze": "Czech",
+        "ces": "Czech", "dan": "Danish", "swe": "Swedish",
+        "nor": "Norwegian", "nob": "Norwegian", "fin": "Finnish",
+        "tur": "Turkish", "ara": "Arabic", "heb": "Hebrew",
+        "rus": "Russian", "ukr": "Ukrainian", "gre": "Greek",
+        "ell": "Greek", "jpn": "Japanese", "kor": "Korean",
+        "chi": "Chinese", "zho": "Chinese", "tha": "Thai",
+        "vie": "Vietnamese", "ind": "Indonesian", "may": "Malay",
+        "msa": "Malay", "hrv": "Croatian", "baq": "Basque",
+        "eus": "Basque", "cat": "Catalan", "glg": "Galician",
+        "fil": "Filipino", "und": "Unknown",
+    }
+
     def _extract_subtitles(self, sub_info):
-        """Extract or convert subtitles to VTT format."""
+        """Extract or convert subtitles to VTT format (multi-language)."""
         sub_type = sub_info[0]
         video_path = sub_info[1]
         source = sub_info[2]
         rel = video_path.relative_to(self.video_folder)
 
         if sub_type == "srt":
-            # Convert external .srt to .vtt
+            # Convert external .srt to .vtt (keep old-style single file)
             srt_path = source
             vtt_path = video_path.with_suffix(".vtt")
             self.converting_now = f"subs: {rel}"
@@ -431,69 +473,57 @@ class AutoConverter:
             finally:
                 self.converting_now = None
 
-        elif sub_type == "embedded":
-            # Extract first text subtitle stream to .vtt
+        elif sub_type == "embedded_multi":
+            # Extract all subtitle streams as lang-coded .vtt files
             streams = source
-            stream = streams[0]  # Take the first one
-            vtt_path = video_path.with_suffix(".vtt")
-            self.converting_now = f"subs: {rel}"
-            lang = stream["lang"]
-            print(f"[SUBS] Extracting embedded sub ({lang}): {rel}")
+            # Determine base path for output files
+            if len(sub_info) > 3:
+                # .bak recovery: output next to the MP4
+                base_path = sub_info[3]
+            else:
+                base_path = video_path
 
-            cmd = [
-                self.ffmpeg_path,
-                "-i", str(video_path),
-                "-map", f"0:{stream['index']}",
-                "-c:s", "webvtt",
-                "-y",
-                str(vtt_path),
-            ]
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                if result.returncode == 0 and vtt_path.exists():
-                    print(f"[SUBS] Done: {vtt_path.name}")
-                else:
-                    print(f"[SUBS] Failed: {rel}")
+            for stream in streams:
+                if self._stop_event.is_set():
+                    break
+                lang = stream["lang"]
+                title = stream.get("title", "")
+                # Build output filename: movie.en.vtt, movie.ro.vtt
+                # Handle duplicate langs by appending title (e.g. eng_SDH, eng_Forced)
+                suffix = lang
+                if title and any(s["lang"] == lang for s in streams if s is not stream):
+                    safe_title = re.sub(r"[^\w]", "", title)[:10]
+                    suffix = f"{lang}_{safe_title}" if safe_title else lang
+
+                vtt_path = base_path.with_suffix(f".{suffix}.vtt")
+                if vtt_path.exists():
+                    continue
+
+                self.converting_now = f"subs ({suffix}): {rel}"
+                print(f"[SUBS] Extracting [{suffix}]: {rel}")
+
+                cmd = [
+                    self.ffmpeg_path,
+                    "-i", str(video_path),
+                    "-map", f"0:{stream['index']}",
+                    "-c:s", "webvtt",
+                    "-y",
+                    str(vtt_path),
+                ]
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                    if result.returncode == 0 and vtt_path.exists():
+                        print(f"[SUBS] Done: {vtt_path.name}")
+                    else:
+                        print(f"[SUBS] Failed: {vtt_path.name}")
+                        if vtt_path.exists():
+                            vtt_path.unlink()
+                except Exception as e:
+                    print(f"[SUBS] Error: {vtt_path.name} - {e}")
                     if vtt_path.exists():
                         vtt_path.unlink()
-            except Exception as e:
-                print(f"[SUBS] Error: {rel} - {e}")
-                if vtt_path.exists():
-                    vtt_path.unlink()
-            finally:
-                self.converting_now = None
-
-        elif sub_type == "embedded_bak":
-            # Extract subtitles from .mkv.bak (originals before conversion)
-            streams = source
-            vtt_path = sub_info[3]  # custom output path for .bak recovery
-            stream = streams[0]
-            self.converting_now = f"subs (bak): {rel}"
-            lang = stream["lang"]
-            print(f"[SUBS] Recovering from .bak ({lang}): {rel}")
-
-            cmd = [
-                self.ffmpeg_path,
-                "-i", str(video_path),
-                "-map", f"0:{stream['index']}",
-                "-c:s", "webvtt",
-                "-y",
-                str(vtt_path),
-            ]
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                if result.returncode == 0 and vtt_path.exists():
-                    print(f"[SUBS] Recovered: {vtt_path.name}")
-                else:
-                    print(f"[SUBS] Recovery failed: {rel} (non-text codec?)")
-                    if vtt_path.exists():
-                        vtt_path.unlink()
-            except Exception as e:
-                print(f"[SUBS] Error: {rel} - {e}")
-                if vtt_path.exists():
-                    vtt_path.unlink()
-            finally:
-                self.converting_now = None
+                finally:
+                    self.converting_now = None
 
     @staticmethod
     def _srt_to_vtt(srt_path, vtt_path):
@@ -514,14 +544,20 @@ class AutoConverter:
 
         self.converting_now = str(rel)
 
-        # Extract subtitles BEFORE conversion (they'll be lost in MP4)
-        vtt_path = input_path.with_suffix(".vtt")
-        if not vtt_path.exists():
-            embedded = self._get_subtitle_streams(input_path)
-            if embedded:
-                stream = embedded[0]
+        # Extract ALL subtitle languages BEFORE conversion (they'll be lost in MP4)
+        embedded = self._get_subtitle_streams(input_path)
+        if embedded:
+            for stream in embedded:
                 lang = stream["lang"]
-                print(f"[CONVERT] Extracting subs ({lang}) from: {rel}")
+                title = stream.get("title", "")
+                suffix = lang
+                if title and any(s["lang"] == lang for s in embedded if s is not stream):
+                    safe_title = re.sub(r"[^\w]", "", title)[:10]
+                    suffix = f"{lang}_{safe_title}" if safe_title else lang
+                vtt_path = input_path.with_suffix(f".{suffix}.vtt")
+                if vtt_path.exists():
+                    continue
+                print(f"[CONVERT] Extracting subs [{suffix}] from: {rel}")
                 sub_cmd = [
                     self.ffmpeg_path,
                     "-i", str(input_path),
@@ -534,7 +570,7 @@ class AutoConverter:
                     if sub_result.returncode == 0 and vtt_path.exists():
                         print(f"[CONVERT] Subs extracted: {vtt_path.name}")
                     else:
-                        print(f"[CONVERT] Subs extraction failed (non-text codec?)")
+                        print(f"[CONVERT] Sub extraction failed [{suffix}]")
                         if vtt_path.exists():
                             vtt_path.unlink()
                 except Exception:
@@ -641,10 +677,31 @@ class VideoScanner:
             folder = parts[0] if len(parts) > 1 else ""
             size = file_path.stat().st_size
 
-            # Check for subtitle file (.vtt)
-            vtt_path = file_path.with_suffix(".vtt")
-            has_subs = vtt_path.exists()
-            sub_path = str(vtt_path.relative_to(self.video_folder)).replace("\\", "/") if has_subs else None
+            # Check for subtitle files (.lang.vtt or legacy .vtt)
+            subs_list = []
+            # New multi-language format: movie.en.vtt, movie.ro.vtt, etc.
+            for vtt in sorted(file_path.parent.glob(file_path.stem + ".*.vtt")):
+                parts = vtt.stem.rsplit(".", 1)
+                if len(parts) == 2:
+                    lang_code = parts[1].split("_")[0]  # "eng_SDH" -> "eng"
+                    label = AutoConverter.LANG_NAMES.get(lang_code, lang_code.upper())
+                    # Append title if present (e.g. "English (SDH)")
+                    if "_" in parts[1]:
+                        title_part = parts[1].split("_", 1)[1]
+                        label = f"{label} ({title_part})"
+                    subs_list.append({
+                        "lang": lang_code,
+                        "label": label,
+                        "path": str(vtt.relative_to(self.video_folder)).replace("\\", "/"),
+                    })
+            # Legacy single .vtt file (backwards compatibility)
+            legacy_vtt = file_path.with_suffix(".vtt")
+            if legacy_vtt.exists() and not subs_list:
+                subs_list.append({
+                    "lang": "en",
+                    "label": "Subtitles",
+                    "path": str(legacy_vtt.relative_to(self.video_folder)).replace("\\", "/"),
+                })
 
             videos.append({
                 "name": file_path.stem,
@@ -655,7 +712,7 @@ class VideoScanner:
                 "extension": ext,
                 "playable": ext in self.browser_playable,
                 "folder": folder,
-                "subtitles": sub_path,
+                "subtitles": subs_list if subs_list else None,
             })
 
         return videos
