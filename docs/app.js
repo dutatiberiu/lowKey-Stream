@@ -248,12 +248,12 @@ function playVideo(index) {
             videoPlayer.appendChild(track);
         });
 
-        // Enable first subtitle track after metadata loads
-        videoPlayer.addEventListener('loadedmetadata', function enableSubs() {
-            if (videoPlayer.textTracks.length > 0) {
-                videoPlayer.textTracks[0].mode = 'showing';
+        // Ensure all subtitle tracks start disabled (user chooses via CC button)
+        videoPlayer.addEventListener('loadedmetadata', function disableSubs() {
+            for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+                videoPlayer.textTracks[i].mode = 'disabled';
             }
-            videoPlayer.removeEventListener('loadedmetadata', enableSubs);
+            videoPlayer.removeEventListener('loadedmetadata', disableSubs);
         });
     }
 
