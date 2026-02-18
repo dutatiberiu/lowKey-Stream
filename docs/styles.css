@@ -373,6 +373,104 @@ body {
     color: var(--accent);
 }
 
+/* ── Folder Drill Navigation ─────────────────────────────── */
+
+.drill-back-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    cursor: pointer;
+    padding: 0 4px 10px;
+    letter-spacing: 0.3px;
+    transition: opacity 0.2s;
+    border: none;
+    background: none;
+}
+
+.drill-back-btn:hover { opacity: 0.65; }
+
+.drill-title {
+    font-family: 'Outfit', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    padding: 0 4px 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.folder-item {
+    padding: 12px 14px;
+    margin-bottom: 6px;
+    background: rgba(10, 10, 11, 0.4);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: all 0.25s ease;
+}
+
+.folder-item:hover {
+    background: rgba(200, 255, 0, 0.06);
+    border-color: var(--accent-dim);
+    transform: translateX(4px);
+}
+
+.folder-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(200, 255, 0, 0.06);
+    border: 1px solid rgba(200, 255, 0, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.folder-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.folder-name {
+    font-family: 'Outfit', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+}
+
+.folder-meta {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+
+.folder-arrow {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    transition: transform 0.2s, color 0.2s;
+}
+
+.folder-item:hover .folder-arrow {
+    color: var(--accent);
+    transform: translateX(3px);
+}
+
 /* Video count */
 .video-count {
     font-family: 'Space Mono', monospace;

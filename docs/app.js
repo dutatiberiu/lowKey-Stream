@@ -6,8 +6,8 @@ const state = {
     tunnelUrl: null,
     videos: [],
     filteredVideos: [],
-    folders: [],
-    currentFolder: 'all',
+    folderTree: { _files: [], _subfolders: {} },
+    drillPath: [],
     currentVideo: null,
     serverOnline: false
 };
@@ -20,7 +20,6 @@ const videoItems = document.getElementById('videoItems');
 const searchInput = document.getElementById('searchInput');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
-const folderTabs = document.getElementById('folderTabs');
 const videoCount = document.getElementById('videoCount');
 const nowPlayingTitle = document.getElementById('nowPlayingTitle');
 const nowPlayingMeta = document.getElementById('nowPlayingMeta');
@@ -58,7 +57,6 @@ async function init() {
             return;
         }
 
-        // Check if server is online, then fetch video list from server
         const online = await checkServerHealth();
         if (online) {
             await refreshVideoList();
@@ -103,86 +101,165 @@ async function refreshVideoList() {
         const response = await fetch(state.tunnelUrl + '/api/videos');
         const data = await response.json();
         state.videos = data.videos;
-        state.filteredVideos = [...state.videos];
-        extractFolders();
-        renderFolderTabs();
-        renderVideoList();
+        state.folderTree = buildFolderTree(state.videos);
+        renderDrill();
     } catch (error) {
         console.error('Failed to refresh video list:', error);
     }
 }
 
 // ============================================================
-// Folder Extraction & Tabs
+// Folder Tree
 // ============================================================
 
-function extractFolders() {
-    const folderSet = new Set();
-    state.videos.forEach(video => {
-        if (video.folder && video.folder !== '') {
-            folderSet.add(video.folder);
+function buildFolderTree(videos) {
+    const tree = { _files: [], _subfolders: {} };
+    for (const v of videos) {
+        const parts = v.path.split('/');
+        let node = tree;
+        for (let i = 0; i < parts.length - 1; i++) {
+            const seg = parts[i];
+            if (!node._subfolders[seg]) {
+                node._subfolders[seg] = { _files: [], _subfolders: {} };
+            }
+            node = node._subfolders[seg];
         }
-    });
-    state.folders = Array.from(folderSet).sort();
+        node._files.push(v);
+    }
+    return tree;
 }
 
-function renderFolderTabs() {
-    if (state.folders.length === 0) {
-        folderTabs.style.display = 'none';
+function getNodeAtPath(path) {
+    let node = state.folderTree;
+    for (const seg of path) {
+        node = node._subfolders[seg] || { _files: [], _subfolders: {} };
+    }
+    return node;
+}
+
+function countVideos(node) {
+    let count = node._files.length;
+    for (const sub of Object.values(node._subfolders)) {
+        count += countVideos(sub);
+    }
+    return count;
+}
+
+function getFolderIcon(name) {
+    const n = name.toLowerCase();
+    if (n.includes('film') || n.includes('movie')) return '🎬';
+    if (n.includes('doc')) return '🎥';
+    if (/^s\d+$/i.test(n)) return '🗂';
+    if (n.includes('serial') || n.includes('series')) return '📺';
+    return '📁';
+}
+
+// ============================================================
+// Drill Navigation
+// ============================================================
+
+function drillInto(name) {
+    state.drillPath.push(name);
+    renderDrill();
+    videoItems.scrollTop = 0;
+}
+
+function drillBack() {
+    state.drillPath.pop();
+    renderDrill();
+    videoItems.scrollTop = 0;
+}
+
+// ============================================================
+// Render — Folder Drill
+// ============================================================
+
+function renderDrill() {
+    const query = searchInput.value.toLowerCase().trim();
+
+    // Search mode: show flat filtered results
+    if (query) {
+        const filtered = state.videos.filter(v =>
+            v.name.toLowerCase().includes(query) ||
+            v.path.toLowerCase().includes(query) ||
+            v.filename.toLowerCase().includes(query)
+        );
+        state.filteredVideos = filtered;
+        renderFlatList(filtered);
+        videoCount.textContent = `${filtered.length} rezultat${filtered.length !== 1 ? 'e' : ''}`;
         return;
     }
 
-    folderTabs.style.display = 'flex';
-    let html = '<div class="tab active" data-folder="all" onclick="filterByFolder(\'all\')">All</div>';
-    state.folders.forEach(folder => {
-        const escapedFolder = folder.replace(/'/g, "\\'");
-        html += `<div class="tab" data-folder="${folder}" onclick="filterByFolder('${escapedFolder}')">${folder}</div>`;
-    });
-    folderTabs.innerHTML = html;
-}
+    const node = getNodeAtPath(state.drillPath);
+    const subfolderNames = Object.keys(node._subfolders).sort();
+    const files = node._files;
 
-function filterByFolder(folder) {
-    state.currentFolder = folder;
-    document.querySelectorAll('.folder-tabs .tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.folder === folder);
-    });
-    applyFilters();
-}
+    // filteredVideos = files at current node (for playNext/playPrevious)
+    state.filteredVideos = files;
 
-// ============================================================
-// Search & Filter
-// ============================================================
-
-function applyFilters() {
-    let filtered = state.videos;
-
-    // Folder filter
-    if (state.currentFolder !== 'all') {
-        filtered = filtered.filter(v => v.folder === state.currentFolder);
+    // Update count/breadcrumb
+    if (state.drillPath.length === 0) {
+        const total = countVideos(state.folderTree);
+        videoCount.textContent = `${total} videoclip${total !== 1 ? 'uri' : ''}`;
+    } else {
+        videoCount.textContent = state.drillPath.join(' › ');
     }
 
-    // Search filter
-    const query = searchInput.value.toLowerCase().trim();
-    if (query) {
-        filtered = filtered.filter(v =>
-            v.name.toLowerCase().includes(query) ||
-            v.folder.toLowerCase().includes(query) ||
-            v.filename.toLowerCase().includes(query)
-        );
+    let html = '';
+
+    // Back button
+    if (state.drillPath.length > 0) {
+        const backLabel = state.drillPath.length > 1
+            ? state.drillPath[state.drillPath.length - 2]
+            : 'Colecție';
+        html += `
+            <div class="drill-back-btn" onclick="drillBack()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+                ${backLabel}
+            </div>
+            <div class="drill-title">${state.drillPath[state.drillPath.length - 1]}</div>`;
     }
 
-    state.filteredVideos = filtered;
-    renderVideoList();
+    // Empty state
+    if (subfolderNames.length === 0 && files.length === 0) {
+        html += `
+            <div class="empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                <p>Folder gol</p>
+            </div>`;
+        videoItems.innerHTML = html;
+        return;
+    }
+
+    // Subfolders
+    subfolderNames.forEach(name => {
+        const sub = node._subfolders[name];
+        const total = countVideos(sub);
+        const icon = getFolderIcon(name);
+        const safeName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        html += `
+            <div class="folder-item" onclick="drillInto('${safeName}')">
+                <div class="folder-icon">${icon}</div>
+                <div class="folder-info">
+                    <div class="folder-name">${name}</div>
+                    <div class="folder-meta">${total} videoclip${total !== 1 ? 'uri' : ''}</div>
+                </div>
+                <svg class="folder-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>`;
+    });
+
+    // Files
+    files.forEach((video, index) => {
+        html += renderVideoItem(video, index);
+    });
+
+    videoItems.innerHTML = html;
 }
 
-// ============================================================
-// Video List Rendering
-// ============================================================
-
-function renderVideoList() {
-    videoCount.textContent = `${state.filteredVideos.length} video${state.filteredVideos.length !== 1 ? 's' : ''}`;
-
-    if (state.filteredVideos.length === 0) {
+function renderFlatList(videos) {
+    if (videos.length === 0) {
         videoItems.innerHTML = `
             <div class="empty-state">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3">
@@ -194,35 +271,36 @@ function renderVideoList() {
         return;
     }
 
-    videoItems.innerHTML = state.filteredVideos.map((video, index) => {
-        const isActive = state.currentVideo && state.currentVideo.path === video.path;
-        const playableClass = video.playable ? '' : 'not-playable';
-        const warningBadge = video.playable ? '' : '<span class="badge-warning" title="May not play in browser">!</span>';
-        const extBadge = video.extension.replace('.', '').toUpperCase();
-        const subsBadge = video.subtitles && video.subtitles.length > 0
-            ? `<span class="meta-subs" title="${video.subtitles.map(s => s.label).join(', ')}">CC ${video.subtitles.length > 1 ? video.subtitles.length : ''}</span>`
-            : '';
+    videoItems.innerHTML = videos.map((video, index) => renderVideoItem(video, index)).join('');
+}
 
-        return `
-            <div class="video-item ${isActive ? 'active' : ''} ${playableClass}"
-                 onclick="playVideo(${index})" data-index="${index}">
-                <div class="video-item-icon">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polygon points="5 3 19 12 5 21 5 3"/>
-                    </svg>
-                    ${warningBadge}
+function renderVideoItem(video, index) {
+    const isActive = state.currentVideo && state.currentVideo.path === video.path;
+    const playableClass = video.playable ? '' : 'not-playable';
+    const warningBadge = video.playable ? '' : '<span class="badge-warning" title="May not play in browser">!</span>';
+    const extBadge = video.extension.replace('.', '').toUpperCase();
+    const subsBadge = video.subtitles && video.subtitles.length > 0
+        ? `<span class="meta-subs" title="${video.subtitles.map(s => s.label).join(', ')}">CC ${video.subtitles.length > 1 ? video.subtitles.length : ''}</span>`
+        : '';
+
+    return `
+        <div class="video-item ${isActive ? 'active' : ''} ${playableClass}"
+             onclick="playVideo(${index})" data-index="${index}">
+            <div class="video-item-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                ${warningBadge}
+            </div>
+            <div class="video-item-info">
+                <div class="video-item-name" title="${video.filename}">${video.name}</div>
+                <div class="video-item-meta">
+                    <span class="meta-size">${video.size_display}</span>
+                    <span class="meta-ext">${extBadge}</span>
+                    ${subsBadge}
                 </div>
-                <div class="video-item-info">
-                    <div class="video-item-name" title="${video.filename}">${video.name}</div>
-                    <div class="video-item-meta">
-                        <span class="meta-folder">${video.folder || 'Root'}</span>
-                        <span class="meta-size">${video.size_display}</span>
-                        <span class="meta-ext">${extBadge}</span>
-                        ${subsBadge}
-                    </div>
-                </div>
-            </div>`;
-    }).join('');
+            </div>
+        </div>`;
 }
 
 // ============================================================
@@ -233,7 +311,6 @@ function playVideo(index) {
     const video = state.filteredVideos[index];
     if (!video) return;
 
-    // Format warning
     if (!video.playable) {
         showFormatWarning(video.extension);
     } else {
@@ -242,11 +319,10 @@ function playVideo(index) {
 
     state.currentVideo = video;
 
-    // Build video URL
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
     const videoUrl = `${state.tunnelUrl}/video/${encodedPath}`;
 
-    // Reset audio selector until new video metadata loads
+    // Audio selector hidden on new video
     if (audioTrackSelector) audioTrackSelector.style.display = 'none';
 
     // Remove existing subtitle tracks
@@ -254,7 +330,7 @@ function playVideo(index) {
 
     videoPlayer.src = videoUrl;
 
-    // Add subtitle tracks if available (must be added BEFORE load)
+    // Add subtitle tracks (must be added BEFORE load)
     if (video.subtitles && video.subtitles.length > 0) {
         video.subtitles.forEach((sub, i) => {
             const track = document.createElement('track');
@@ -266,7 +342,7 @@ function playVideo(index) {
             videoPlayer.appendChild(track);
         });
 
-        // Ensure all subtitle tracks start disabled (user chooses via CC button)
+        // All subtitle tracks start disabled (user chooses via CC button)
         videoPlayer.addEventListener('loadedmetadata', function disableSubs() {
             for (let i = 0; i < videoPlayer.textTracks.length; i++) {
                 videoPlayer.textTracks[i].mode = 'disabled';
@@ -275,26 +351,19 @@ function playVideo(index) {
         });
     }
 
-    // Detect audio tracks after metadata loads
-    videoPlayer.addEventListener('loadedmetadata', function detectAudio() {
-        videoPlayer.removeEventListener('loadedmetadata', detectAudio);
-        renderAudioTrackSelector();
-    });
-
     videoPlayer.load();
     videoPlayer.play().catch(err => {
         console.error('Playback error:', err);
     });
 
-    // Update UI
     videoOverlay.classList.add('hidden');
     nowPlayingTitle.textContent = video.name;
     nowPlayingMeta.innerHTML = `
-        <span class="meta-folder">${video.folder || 'Root'}</span>
         <span class="meta-size">${video.size_display}</span>
         <span class="meta-ext">${video.extension.replace('.', '').toUpperCase()}</span>`;
 
-    renderVideoList();
+    // Re-render to highlight active item
+    renderDrill();
 
     // Scroll active item into view
     setTimeout(() => {
@@ -357,7 +426,6 @@ function switchAudioTrack(selectedIndex) {
     for (let i = 0; i < tracks.length; i++) {
         tracks[i].enabled = (i === selectedIndex);
     }
-    // Update button styles
     audioTrackSelector.querySelectorAll('.audio-btn').forEach((btn, i) => {
         btn.classList.toggle('active', i === selectedIndex);
     });
@@ -394,7 +462,6 @@ function updateStatus(status, message) {
 // ============================================================
 
 document.addEventListener('keydown', (e) => {
-    // Don't capture when typing in search
     if (e.target.tagName === 'INPUT') return;
 
     switch (e.code) {
@@ -456,7 +523,6 @@ videoPlayer.addEventListener('error', () => {
     }
 });
 
-// Click overlay to dismiss
 videoOverlay.addEventListener('click', () => {
     if (state.filteredVideos.length > 0) {
         playVideo(0);
@@ -467,7 +533,7 @@ videoOverlay.addEventListener('click', () => {
 // Event Listeners & Start
 // ============================================================
 
-searchInput.addEventListener('input', () => applyFilters());
+searchInput.addEventListener('input', () => renderDrill());
 
 // Periodic health check + video list refresh (every 2 minutes)
 setInterval(async () => {
