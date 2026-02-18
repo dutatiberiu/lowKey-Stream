@@ -582,6 +582,8 @@ class AutoConverter:
         cmd = [
             self.ffmpeg_path,
             "-i", str(input_path),
+            "-map", "0:v:0",   # first video stream
+            "-map", "0:a",     # ALL audio streams
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "192k",

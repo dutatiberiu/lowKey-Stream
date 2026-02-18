@@ -26,6 +26,21 @@ const nowPlayingTitle = document.getElementById('nowPlayingTitle');
 const nowPlayingMeta = document.getElementById('nowPlayingMeta');
 const formatWarning = document.getElementById('formatWarning');
 const formatWarningText = document.getElementById('formatWarningText');
+const audioTrackSelector = document.getElementById('audioTrackSelector');
+
+// ISO 639 language code -> display name
+const LANG_NAMES = {
+    eng: 'English', rum: 'Romanian', ron: 'Romanian',
+    spa: 'Spanish', fre: 'French',  fra: 'French',
+    ger: 'German',  deu: 'German',  ita: 'Italian',
+    por: 'Portuguese', dut: 'Dutch', nld: 'Dutch',
+    pol: 'Polish',  hun: 'Hungarian', jpn: 'Japanese',
+    kor: 'Korean',  chi: 'Chinese', zho: 'Chinese',
+    rus: 'Russian', ara: 'Arabic',  tur: 'Turkish',
+    swe: 'Swedish', dan: 'Danish',  nor: 'Norwegian',
+    fin: 'Finnish', cze: 'Czech',   ces: 'Czech',
+    und: 'Unknown',
+};
 
 // ============================================================
 // Initialization
@@ -231,6 +246,9 @@ function playVideo(index) {
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
     const videoUrl = `${state.tunnelUrl}/video/${encodedPath}`;
 
+    // Reset audio selector until new video metadata loads
+    if (audioTrackSelector) audioTrackSelector.style.display = 'none';
+
     // Remove existing subtitle tracks
     videoPlayer.querySelectorAll('track').forEach(t => t.remove());
 
@@ -256,6 +274,12 @@ function playVideo(index) {
             videoPlayer.removeEventListener('loadedmetadata', disableSubs);
         });
     }
+
+    // Detect audio tracks after metadata loads
+    videoPlayer.addEventListener('loadedmetadata', function detectAudio() {
+        videoPlayer.removeEventListener('loadedmetadata', detectAudio);
+        renderAudioTrackSelector();
+    });
 
     videoPlayer.load();
     videoPlayer.play().catch(err => {
@@ -295,6 +319,48 @@ function playPrevious() {
     if (currentIndex > 0) {
         playVideo(currentIndex - 1);
     }
+}
+
+// ============================================================
+// Audio Track Selector
+// ============================================================
+
+function renderAudioTrackSelector() {
+    if (!audioTrackSelector) return;
+    audioTrackSelector.innerHTML = '';
+
+    const tracks = videoPlayer.audioTracks;
+    if (!tracks || tracks.length <= 1) {
+        audioTrackSelector.style.display = 'none';
+        return;
+    }
+
+    audioTrackSelector.style.display = 'flex';
+
+    for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        const langCode = track.language || '';
+        const label = LANG_NAMES[langCode] || track.label || langCode.toUpperCase() || `Track ${i + 1}`;
+        const btn = document.createElement('button');
+        btn.className = 'audio-btn' + (track.enabled ? ' active' : '');
+        btn.textContent = label;
+        btn.title = `Audio: ${label}`;
+        btn.dataset.index = i;
+        btn.addEventListener('click', () => switchAudioTrack(i));
+        audioTrackSelector.appendChild(btn);
+    }
+}
+
+function switchAudioTrack(selectedIndex) {
+    const tracks = videoPlayer.audioTracks;
+    if (!tracks) return;
+    for (let i = 0; i < tracks.length; i++) {
+        tracks[i].enabled = (i === selectedIndex);
+    }
+    // Update button styles
+    audioTrackSelector.querySelectorAll('.audio-btn').forEach((btn, i) => {
+        btn.classList.toggle('active', i === selectedIndex);
+    });
 }
 
 // ============================================================

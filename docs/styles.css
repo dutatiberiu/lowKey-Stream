@@ -537,6 +537,46 @@ body {
     font-size: 10px;
 }
 
+/* Audio track selector */
+.audio-track-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.audio-track-selector::before {
+    content: '🔊';
+    font-size: 13px;
+    margin-right: 2px;
+}
+
+.audio-btn {
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text-secondary);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.audio-btn:hover {
+    background: rgba(200, 255, 0, 0.08);
+    border-color: var(--accent-dim);
+    color: var(--text-primary);
+}
+
+.audio-btn.active {
+    background: rgba(200, 255, 0, 0.12);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 /* Empty state */
 .empty-state {
     display: flex;

@@ -217,6 +217,8 @@ def convert_file(ffmpeg_path, input_path, output_path):
     cmd = [
         ffmpeg_path,
         "-i", str(input_path),
+        "-map", "0:v:0",         # First video stream
+        "-map", "0:a",           # ALL audio streams (keep all languages)
         "-c:v", "copy",          # Copy video (no re-encode)
         "-c:a", "aac",           # Re-encode audio to AAC
         "-b:a", "192k",          # Audio bitrate
