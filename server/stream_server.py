@@ -652,10 +652,12 @@ class AutoConverter:
 class VideoScanner:
     """Recursively scans a folder for video files."""
 
-    def __init__(self, video_folder, supported_extensions, browser_playable):
+    def __init__(self, video_folder, supported_extensions, browser_playable, ffprobe_path=None):
         self.video_folder = Path(video_folder)
         self.supported_extensions = [ext.lower() for ext in supported_extensions]
         self.browser_playable = [ext.lower() for ext in browser_playable]
+        self.ffprobe_path = ffprobe_path
+        self._audio_cache = {}  # {str(path): (mtime, tracks_list)}
 
     def scan(self):
         """Scan video folder and return list of video dicts.
@@ -723,6 +725,9 @@ class VideoScanner:
                     "path": str(legacy_vtt.relative_to(self.video_folder)).replace("\\", "/"),
                 })
 
+            # Detect audio tracks for MP4 files (to enable server-side track switching)
+            audio_tracks = self._get_audio_tracks(file_path) if ext == ".mp4" else []
+
             videos.append({
                 "name": file_path.stem,
                 "filename": file_path.name,
@@ -733,9 +738,43 @@ class VideoScanner:
                 "playable": ext in self.browser_playable,
                 "folder": folder,
                 "subtitles": subs_list if subs_list else None,
+                "audio_tracks": audio_tracks if len(audio_tracks) > 1 else None,
             })
 
         return videos
+
+    def _get_audio_tracks(self, file_path):
+        """Get audio streams from file using ffprobe. Cached by mtime."""
+        if not self.ffprobe_path:
+            return []
+        key = str(file_path)
+        try:
+            mtime = file_path.stat().st_mtime
+        except OSError:
+            return []
+        cached = self._audio_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        try:
+            result = subprocess.run(
+                [self.ffprobe_path, "-v", "quiet", "-select_streams", "a",
+                 "-show_entries", "stream=index:stream_tags=language",
+                 "-of", "json", str(file_path)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            )
+            data = json.loads(result.stdout)
+            tracks = []
+            for i, s in enumerate(data.get("streams", [])):
+                lang = s.get("tags", {}).get("language", "und")
+                if lang == "und":
+                    label = f"Track {i + 1}"
+                else:
+                    label = AutoConverter.LANG_NAMES.get(lang, lang.upper())
+                tracks.append({"index": i, "lang": lang, "label": label})
+            self._audio_cache[key] = (mtime, tracks)
+            return tracks
+        except Exception:
+            return []
 
     @staticmethod
     def _format_size(size_bytes):
@@ -758,6 +797,7 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
 
     video_list = []
     video_folder = ""
+    ffmpeg_path = ""
 
     def log_message(self, format, *args):
         method = args[0] if args else ""
@@ -783,7 +823,16 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
         self._route_request(head_only=False)
 
     def _route_request(self, head_only=False):
-        path = urllib.parse.unquote(self.path)
+        # Split path from query string before unquoting
+        raw = self.path
+        if "?" in raw:
+            raw_path, query_string = raw.split("?", 1)
+            query_params = urllib.parse.parse_qs(query_string)
+        else:
+            raw_path = raw
+            query_params = {}
+
+        path = urllib.parse.unquote(raw_path)
 
         if path == "/api/videos":
             self._handle_api_videos(head_only)
@@ -791,7 +840,11 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_api_health(head_only)
         elif path.startswith("/video/"):
             relative_path = path[7:]
-            self._handle_video_stream(relative_path, head_only)
+            audio_param = query_params.get("audio", [None])[0]
+            if audio_param is not None and audio_param.isdigit():
+                self._handle_video_stream_audio(relative_path, int(audio_param), head_only)
+            else:
+                self._handle_video_stream(relative_path, head_only)
         elif path.startswith("/subs/"):
             relative_path = path[6:]
             self._handle_subtitle(relative_path, head_only)
@@ -904,6 +957,59 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
             if not head_only:
                 self._stream_file(full_path, 0, file_size)
 
+    def _handle_video_stream_audio(self, relative_path, audio_index, head_only=False):
+        """Stream video remuxed with a single audio track via ffmpeg pipe."""
+        ffmpeg_path = StreamRequestHandler.ffmpeg_path
+        if not ffmpeg_path:
+            self.send_error(503, "ffmpeg not available")
+            return
+
+        video_folder = Path(self.video_folder).resolve()
+        full_path = (video_folder / relative_path).resolve()
+
+        if not str(full_path).startswith(str(video_folder)):
+            self.send_error(403, "Forbidden")
+            return
+        if not full_path.exists() or not full_path.is_file():
+            self.send_error(404, "File not found")
+            return
+
+        cmd = [
+            ffmpeg_path,
+            "-i", str(full_path),
+            "-map", "0:v:0",
+            "-map", f"0:a:{audio_index}",
+            "-c", "copy",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4",
+            "pipe:1",
+        ]
+
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        if head_only:
+            return
+
+        proc = None
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        except Exception as e:
+            print(f"[AUDIO] Stream error: {e}")
+        finally:
+            if proc and proc.poll() is None:
+                proc.terminate()
+
     def _stream_file(self, file_path, start, length):
         BLOCK_SIZE = 1024 * 1024  # 1MB blocks for faster streaming
         try:
@@ -1006,11 +1112,21 @@ def main():
         print("       Install with: winget install Gyan.FFmpeg")
     print()
 
+    # Find ffprobe (next to ffmpeg or on PATH)
+    ffprobe_path = None
+    if ffmpeg_path:
+        ffprobe_beside = Path(ffmpeg_path).parent / "ffprobe.exe"
+        if ffprobe_beside.exists():
+            ffprobe_path = str(ffprobe_beside)
+        else:
+            ffprobe_path = find_executable("ffprobe")
+
     # Scanner
     scanner = VideoScanner(
         config["video_folder"],
         config["supported_extensions"],
         config["browser_playable"],
+        ffprobe_path=ffprobe_path,
     )
 
     def rescan_and_update():
@@ -1056,6 +1172,7 @@ def main():
     print(f">> Starting HTTP server on port {config['server_port']}...")
     StreamRequestHandler.video_list = videos
     StreamRequestHandler.video_folder = config["video_folder"]
+    StreamRequestHandler.ffmpeg_path = ffmpeg_path or ""
     server = http.server.ThreadingHTTPServer(("0.0.0.0", config["server_port"]), StreamRequestHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()

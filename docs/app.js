@@ -246,8 +246,7 @@ function playVideo(index) {
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
     const videoUrl = `${state.tunnelUrl}/video/${encodedPath}`;
 
-    // Reset audio selector until new video metadata loads
-    if (audioTrackSelector) audioTrackSelector.style.display = 'none';
+    // Audio selector is rendered from API data after src is set
 
     // Remove existing subtitle tracks
     videoPlayer.querySelectorAll('track').forEach(t => t.remove());
@@ -275,11 +274,8 @@ function playVideo(index) {
         });
     }
 
-    // Detect audio tracks after metadata loads
-    videoPlayer.addEventListener('loadedmetadata', function detectAudio() {
-        videoPlayer.removeEventListener('loadedmetadata', detectAudio);
-        renderAudioTrackSelector();
-    });
+    // Render audio selector immediately from API data (no need to wait for metadata)
+    renderAudioTrackSelector(video);
 
     videoPlayer.load();
     videoPlayer.play().catch(err => {
@@ -325,11 +321,11 @@ function playPrevious() {
 // Audio Track Selector
 // ============================================================
 
-function renderAudioTrackSelector() {
+function renderAudioTrackSelector(video) {
     if (!audioTrackSelector) return;
     audioTrackSelector.innerHTML = '';
 
-    const tracks = videoPlayer.audioTracks;
+    const tracks = video && video.audio_tracks;
     if (!tracks || tracks.length <= 1) {
         audioTrackSelector.style.display = 'none';
         return;
@@ -337,26 +333,33 @@ function renderAudioTrackSelector() {
 
     audioTrackSelector.style.display = 'flex';
 
-    for (let i = 0; i < tracks.length; i++) {
-        const track = tracks[i];
-        const langCode = track.language || '';
-        const label = LANG_NAMES[langCode] || track.label || langCode.toUpperCase() || `Track ${i + 1}`;
+    tracks.forEach((track, i) => {
         const btn = document.createElement('button');
-        btn.className = 'audio-btn' + (track.enabled ? ' active' : '');
-        btn.textContent = label;
-        btn.title = `Audio: ${label}`;
+        btn.className = 'audio-btn' + (i === 0 ? ' active' : '');
+        btn.textContent = track.label;
+        btn.title = `Audio: ${track.label}`;
         btn.dataset.index = i;
-        btn.addEventListener('click', () => switchAudioTrack(i));
+        btn.addEventListener('click', () => switchAudioTrack(i, video));
         audioTrackSelector.appendChild(btn);
-    }
+    });
 }
 
-function switchAudioTrack(selectedIndex) {
-    const tracks = videoPlayer.audioTracks;
-    if (!tracks) return;
-    for (let i = 0; i < tracks.length; i++) {
-        tracks[i].enabled = (i === selectedIndex);
-    }
+function switchAudioTrack(selectedIndex, video) {
+    const savedTime = videoPlayer.currentTime;
+
+    const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
+    const videoUrl = `${state.tunnelUrl}/video/${encodedPath}?audio=${selectedIndex}`;
+
+    videoPlayer.src = videoUrl;
+    videoPlayer.load();
+
+    // Seek back to saved position once enough data is buffered
+    videoPlayer.addEventListener('canplay', function seekBack() {
+        videoPlayer.removeEventListener('canplay', seekBack);
+        if (savedTime > 0) videoPlayer.currentTime = savedTime;
+        videoPlayer.play().catch(() => {});
+    });
+
     // Update button styles
     audioTrackSelector.querySelectorAll('.audio-btn').forEach((btn, i) => {
         btn.classList.toggle('active', i === selectedIndex);
