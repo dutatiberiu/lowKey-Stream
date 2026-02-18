@@ -577,6 +577,23 @@ class AutoConverter:
                     if vtt_path.exists():
                         vtt_path.unlink()
 
+        # Detect video codec - re-encode if not web-compatible (e.g. MPEG4 Part 2 / XviD)
+        WEB_COMPATIBLE_VIDEO = {"h264", "hevc", "vp8", "vp9", "av1"}
+        video_codec = "copy"
+        try:
+            probe = subprocess.run(
+                [self.ffprobe_path or self.ffmpeg_path, "-v", "quiet",
+                 "-select_streams", "v:0", "-show_entries", "stream=codec_name",
+                 "-of", "csv=p=0", str(input_path)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            )
+            detected = probe.stdout.strip().lower()
+            if detected and detected not in WEB_COMPATIBLE_VIDEO:
+                video_codec = "libx264"
+                print(f"[CONVERT] Re-encoding video ({detected} -> H.264): {rel}")
+        except Exception:
+            pass
+
         print(f"[CONVERT] Starting: {rel}")
 
         cmd = [
@@ -584,7 +601,8 @@ class AutoConverter:
             "-i", str(input_path),
             "-map", "0:v:0",   # first video stream
             "-map", "0:a",     # ALL audio streams
-            "-c:v", "copy",
+            "-c:v", video_codec,
+            *([ "-preset", "fast", "-crf", "23" ] if video_codec == "libx264" else []),
             "-c:a", "aac",
             "-b:a", "192k",
             "-movflags", "+faststart",

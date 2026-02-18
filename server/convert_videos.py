@@ -212,14 +212,39 @@ def extract_subtitles(ffmpeg_path, ffprobe_path, input_path):
         print(f"    Extracted {extracted} subtitle track(s)")
 
 
+WEB_COMPATIBLE_VIDEO = {"h264", "hevc", "vp8", "vp9", "av1"}
+
+
 def convert_file(ffmpeg_path, input_path, output_path):
-    """Convert video: copy video stream, re-encode audio to AAC."""
+    """Convert video: copy video if web-compatible, else re-encode to H.264. Keep all audio tracks."""
+    # Detect video codec
+    ffprobe_path = str(Path(ffmpeg_path).parent / "ffprobe.exe")
+    if not os.path.isfile(ffprobe_path):
+        ffprobe_path = shutil.which("ffprobe") or ffprobe_path
+
+    video_codec = "copy"
+    try:
+        probe = subprocess.run(
+            [ffprobe_path, "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(input_path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+        detected = probe.stdout.strip().lower()
+        if detected and detected not in WEB_COMPATIBLE_VIDEO:
+            video_codec = "libx264"
+            print(f"    Video codec '{detected}' not web-compatible, re-encoding to H.264...")
+    except Exception:
+        pass
+
+    extra_video_args = ["-preset", "fast", "-crf", "23"] if video_codec == "libx264" else []
+
     cmd = [
         ffmpeg_path,
         "-i", str(input_path),
         "-map", "0:v:0",         # First video stream
         "-map", "0:a",           # ALL audio streams (keep all languages)
-        "-c:v", "copy",          # Copy video (no re-encode)
+        "-c:v", video_codec,
+        *extra_video_args,
         "-c:a", "aac",           # Re-encode audio to AAC
         "-b:a", "192k",          # Audio bitrate
         "-movflags", "+faststart",  # Optimize for streaming
