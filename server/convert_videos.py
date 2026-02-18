@@ -79,7 +79,7 @@ def get_audio_codec(ffmpeg_path, video_path):
             [ffprobe_path, "-v", "quiet", "-select_streams", "a:0",
              "-show_entries", "stream=codec_name", "-of", "csv=p=0",
              str(video_path)],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
         )
         return result.stdout.strip()
     except Exception:
@@ -95,7 +95,7 @@ def get_video_bitrate(ffprobe_path, video_path):
             [ffprobe_path, "-v", "quiet",
              "-show_entries", "format=bit_rate",
              "-of", "csv=p=0", str(video_path)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         val = result.stdout.strip()
         return int(val) if val and val.isdigit() else 0
@@ -120,7 +120,7 @@ def compress_file(ffmpeg_path, input_path, output_path):
     ]
 
     print(f"    Compressing (this may take a while)... ", end="", flush=True)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     if result.returncode == 0:
         print("OK")
@@ -154,7 +154,7 @@ def extract_subtitles(ffmpeg_path, ffprobe_path, input_path):
             [ffprobe_path, "-v", "quiet", "-select_streams", "s",
              "-show_entries", "stream=index,codec_name:stream_tags=language,title",
              "-of", "json", str(input_path)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         data = json.loads(result.stdout)
         text_codecs = {"srt", "subrip", "ass", "ssa", "mov_text", "webvtt"}
@@ -195,7 +195,7 @@ def extract_subtitles(ffmpeg_path, ffprobe_path, input_path):
             "-y", str(vtt_path),
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
             if result.returncode == 0 and vtt_path.exists():
                 print("OK")
                 extracted += 1
@@ -228,7 +228,7 @@ def convert_file(ffmpeg_path, input_path, output_path):
     ]
 
     print(f"    Converting... ", end="", flush=True)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     if result.returncode == 0:
         print("OK")

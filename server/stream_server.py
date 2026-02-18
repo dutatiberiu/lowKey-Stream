@@ -130,7 +130,7 @@ class AutoConverter:
                 [self.ffprobe_path, "-v", "quiet",
                  "-show_entries", "format=bit_rate",
                  "-of", "csv=p=0", str(mp4_path)],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             )
             val = result.stdout.strip()
             return int(val) if val and val.isdigit() else 0
@@ -256,7 +256,7 @@ class AutoConverter:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=3600,
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600,
             )
             if result.returncode == 0 and temp_path.exists():
                 mp4_path.unlink()
@@ -318,7 +318,7 @@ class AutoConverter:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True,
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=14400,  # 4 hours max per file
             )
             if result.returncode == 0 and temp_path.exists():
@@ -414,7 +414,7 @@ class AutoConverter:
                 [self.ffprobe_path, "-v", "quiet", "-select_streams", "s",
                  "-show_entries", "stream=index,codec_name:stream_tags=language,title",
                  "-of", "json", str(video_path)],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             )
             data = json.loads(result.stdout)
             streams = []
@@ -511,7 +511,7 @@ class AutoConverter:
                     str(vtt_path),
                 ]
                 try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
                     if result.returncode == 0 and vtt_path.exists():
                         print(f"[SUBS] Done: {vtt_path.name}")
                     else:
@@ -566,7 +566,7 @@ class AutoConverter:
                     "-y", str(vtt_path),
                 ]
                 try:
-                    sub_result = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=120)
+                    sub_result = subprocess.run(sub_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
                     if sub_result.returncode == 0 and vtt_path.exists():
                         print(f"[CONVERT] Subs extracted: {vtt_path.name}")
                     else:
@@ -594,7 +594,7 @@ class AutoConverter:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True,
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=3600,  # 1 hour max per file
             )
 
