@@ -203,7 +203,7 @@ class AutoConverter:
         for file_path in sorted(self.video_folder.rglob("*.mp4")):
             if not file_path.is_file():
                 continue
-            if file_path.name.endswith(".mp4.tmp"):
+            if file_path.name.startswith("_"):
                 continue
             if self._needs_faststart(file_path):
                 needs_fix.append(file_path)
@@ -285,7 +285,7 @@ class AutoConverter:
         for file_path in sorted(self.video_folder.rglob("*.mp4")):
             if not file_path.is_file():
                 continue
-            if file_path.name.endswith(".mp4.tmp"):
+            if file_path.name.startswith("_"):
                 continue
             bitrate = self._get_video_bitrate(file_path)
             if bitrate > self.MAX_BITRATE:
@@ -540,7 +540,7 @@ class AutoConverter:
         """Convert a single file to MP4 (video copy + audio AAC)."""
         rel = input_path.relative_to(self.video_folder)
         output_path = input_path.with_suffix(".mp4")
-        temp_path = input_path.with_suffix(".mp4.tmp")
+        temp_path = input_path.parent / "_convert_temp.mp4"
 
         self.converting_now = str(rel)
 
@@ -674,7 +674,7 @@ class VideoScanner:
             if ext not in self.supported_extensions:
                 continue
             # Skip temp files from conversion
-            if file_path.name.endswith(".mp4.tmp"):
+            if file_path.name.startswith("_"):
                 continue
             all_files.append(file_path)
 
