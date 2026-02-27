@@ -715,7 +715,7 @@ body {
     }
 
     .sidebar {
-        max-height: 400px;
+        max-height: min(400px, 50vh);
     }
 }
 
@@ -759,13 +759,29 @@ body {
 }
 
 @media (max-width: 480px) {
-    .folder-tabs {
-        gap: 4px;
+    .app-container {
+        padding: 8px;
+        gap: 12px;
     }
 
-    .folder-tabs .tab {
-        padding: 6px 12px;
-        font-size: 11px;
+    .header {
+        padding: 10px 12px;
+        margin-bottom: 12px;
+    }
+
+    .logo-img {
+        height: 60px;
+        margin: -16px 0;
+    }
+
+    .player-section {
+        padding: 12px;
+        gap: 14px;
+    }
+
+    .sidebar {
+        padding: 12px;
+        max-height: 45vh;
     }
 
     .video-item {
@@ -774,6 +790,31 @@ body {
     }
 
     .video-item-name {
+        font-size: 13px;
+    }
+
+    .now-playing-title {
+        font-size: 14px;
+    }
+
+    .folder-item {
+        padding: 10px 12px;
+    }
+
+    .folder-name {
+        font-size: 13px;
+    }
+
+    .drill-back-btn {
+        font-size: 12px;
+    }
+
+    .drill-title {
+        font-size: 13px;
+    }
+
+    #searchInput {
+        padding: 9px 12px 9px 38px;
         font-size: 13px;
     }
 }
