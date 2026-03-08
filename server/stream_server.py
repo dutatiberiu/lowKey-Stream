@@ -961,31 +961,38 @@ class MetadataFetcher:
             return self._db.get(path)
 
     def clean_title(self, filename):
-        """Extract clean title and year from messy video filename."""
+        """Extract clean title, year, and media type from messy video filename."""
         name = Path(filename).stem
-        # Extract year
+
+        # Detect TV series: SxxExx pattern
+        season_ep = re.search(r"\b[Ss]\d{1,2}[Ee]\d{1,2}\b", name)
+        is_tv = bool(season_ep)
+
+        # Replace dots/underscores with spaces
+        name = re.sub(r"[._]", " ", name)
+        season_ep_spaced = re.search(r"\b[Ss]\d{1,2}[Ee]\d{1,2}\b", name)
+
         year = None
         year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
         if year_match:
             year = int(year_match.group(1))
 
-        # Replace dots/underscores with spaces
-        name = re.sub(r"[._]", " ", name)
-
-        # Cut off at year or quality keywords
+        # Cut off at season/episode marker first (for TV), then year, then quality keywords
+        cut_at = len(name)
+        if season_ep_spaced:
+            cut_at = min(cut_at, season_ep_spaced.start())
         if year_match:
-            name = name[:year_match.start()]
+            cut_at = min(cut_at, year_match.start())
         else:
-            # Try cutting at quality keywords (space-separated now)
             quality_space = re.search(
                 r"\b(4k|2160p|1080p|720p|480p|bluray|blu ray|bdrip|webrip|web dl|"
                 r"hdtv|dvdrip|hevc|x264|x265|h264|h265|xvid|divx|repack|extended)\b",
                 name, re.IGNORECASE,
             )
             if quality_space:
-                name = name[:quality_space.start()]
+                cut_at = min(cut_at, quality_space.start())
 
-        return name.strip(), year
+        return name[:cut_at].strip(), year, is_tv
 
     def _tmdb_request(self, url):
         try:
@@ -1011,33 +1018,65 @@ class MetadataFetcher:
             return None
 
     def _fetch_one(self, video_path, filename):
-        title, year = self.clean_title(filename)
+        title, year, is_tv = self.clean_title(filename)
         if not title:
             return
+
+        # For TV shows, reuse existing entry if same show already fetched
+        if is_tv:
+            with self._lock:
+                title_lower = title.lower()
+                for existing in self._db.values():
+                    if existing.get("is_tv") and existing.get("title", "").lower() == title_lower:
+                        reused = dict(existing)
+                        reused["fetched_at"] = datetime.now(timezone.utc).isoformat()
+                        self._db[video_path] = reused
+                        self._save_db()
+                        print(f"[TMDB] Reused: {reused['title']} for {filename}")
+                        return
+
         query = urllib.parse.quote(title)
-        url = f"https://api.themoviedb.org/3/search/movie?api_key={self.api_key}&query={query}"
-        if year:
-            url += f"&year={year}"
-        data = self._tmdb_request(url)
-        if not data or not data.get("results"):
-            return
-        movie = data["results"][0]
+
+        if is_tv:
+            url = f"https://api.themoviedb.org/3/search/tv?api_key={self.api_key}&query={query}"
+            if year:
+                url += f"&first_air_date_year={year}"
+            data = self._tmdb_request(url)
+            if not data or not data.get("results"):
+                return
+            item = data["results"][0]
+            item_title = item.get("name", title)
+            date_field = item.get("first_air_date", "")
+            item_year = year or (int(date_field[:4]) if date_field else None)
+        else:
+            url = f"https://api.themoviedb.org/3/search/movie?api_key={self.api_key}&query={query}"
+            if year:
+                url += f"&year={year}"
+            data = self._tmdb_request(url)
+            if not data or not data.get("results"):
+                return
+            item = data["results"][0]
+            item_title = item.get("title", title)
+            date_field = item.get("release_date", "")
+            item_year = year or (int(date_field[:4]) if date_field else None)
+
         poster_file = None
-        if movie.get("poster_path"):
-            poster_file = self._download_poster(movie["poster_path"])
+        if item.get("poster_path"):
+            poster_file = self._download_poster(item["poster_path"])
         entry = {
-            "tmdb_id": movie.get("id"),
-            "title": movie.get("title", title),
-            "year": year or (int(movie["release_date"][:4]) if movie.get("release_date") else None),
-            "rating": round(movie.get("vote_average", 0), 1),
-            "description": movie.get("overview", ""),
+            "tmdb_id": item.get("id"),
+            "title": item_title,
+            "year": item_year,
+            "rating": round(item.get("vote_average", 0), 1),
+            "description": item.get("overview", ""),
             "poster_file": poster_file,
+            "is_tv": is_tv,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         with self._lock:
             self._db[video_path] = entry
             self._save_db()
-        print(f"[TMDB] Fetched: {entry['title']} ({entry['year']})")
+        print(f"[TMDB] Fetched ({'TV' if is_tv else 'movie'}): {entry['title']} ({entry['year']})")
 
     def fetch_all(self, videos):
         """Start background thread to fetch metadata for all unfetched videos."""
