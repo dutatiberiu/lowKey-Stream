@@ -1,4 +1,9 @@
 server/config.json
+server/metadata_cache.json
+server/movies_db.json
+server/progress.json
+server/thumbnails/
+server/posters/
 __pycache__/
 *.pyc
 *.pyo
