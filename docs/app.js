@@ -9,7 +9,9 @@ const state = {
     folderTree: { _files: [], _subfolders: {} },
     drillPath: [],
     currentVideo: null,
-    serverOnline: false
+    serverOnline: false,
+    pendingSeek: null,
+    progressInterval: null,
 };
 
 // DOM Elements
@@ -26,6 +28,9 @@ const nowPlayingMeta = document.getElementById('nowPlayingMeta');
 const formatWarning = document.getElementById('formatWarning');
 const formatWarningText = document.getElementById('formatWarningText');
 const audioTrackSelector = document.getElementById('audioTrackSelector');
+const resumeBanner = document.getElementById('resumeBanner');
+const resumeText = document.getElementById('resumeText');
+const movieInfo = document.getElementById('movieInfo');
 
 // ISO 639 language code -> display name
 const LANG_NAMES = {
@@ -274,6 +279,110 @@ function renderFlatList(videos) {
     videoItems.innerHTML = videos.map((video, index) => renderVideoItem(video, index)).join('');
 }
 
+function formatDuration(seconds) {
+    if (!seconds || seconds < 1) return '';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatTime(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+async function saveProgress(videoPath) {
+    if (!state.tunnelUrl || !videoPath) return;
+    const position = videoPlayer.currentTime;
+    if (position < 5) return;
+    try {
+        await fetch(`${state.tunnelUrl}/api/progress`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: videoPath, position }),
+        });
+    } catch (_) {}
+}
+
+async function loadProgress(videoPath) {
+    if (!state.tunnelUrl || !videoPath) return null;
+    try {
+        const resp = await fetch(`${state.tunnelUrl}/api/progress/${videoPath.split('/').map(encodeURIComponent).join('/')}`);
+        const data = await resp.json();
+        return data.position || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function showResumeBanner(position) {
+    state.pendingSeek = position;
+    resumeText.textContent = `Continuă din ${formatTime(position)}?`;
+    resumeBanner.classList.add('visible');
+}
+
+function hideResumeBanner() {
+    resumeBanner.classList.remove('visible');
+    state.pendingSeek = null;
+}
+
+function resumePlayback() {
+    hideResumeBanner();
+    if (state.pendingSeek !== null) {
+        videoPlayer.currentTime = state.pendingSeek;
+        state.pendingSeek = null;
+    }
+    videoPlayer.play().catch(() => {});
+}
+
+function startFromBeginning() {
+    hideResumeBanner();
+    videoPlayer.currentTime = 0;
+    videoPlayer.play().catch(() => {});
+}
+
+async function loadMovieMetadata(video) {
+    if (!movieInfo || !state.tunnelUrl) return;
+    movieInfo.style.display = 'none';
+    try {
+        const encoded = video.path.split('/').map(encodeURIComponent).join('/');
+        const resp = await fetch(`${state.tunnelUrl}/api/metadata/${encoded}`);
+        const meta = await resp.json();
+        if (meta && meta.title) {
+            renderMovieInfo(meta);
+        }
+    } catch (_) {}
+}
+
+function renderMovieInfo(meta) {
+    const posterHtml = meta.poster_file
+        ? `<img class="movie-poster" src="${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}" alt="${meta.title}" onerror="this.style.display='none'">`
+        : '';
+    const ratingHtml = meta.rating
+        ? `<span class="movie-rating">★ ${meta.rating.toFixed(1)}</span>`
+        : '';
+    const yearHtml = meta.year ? `<span class="movie-year">${meta.year}</span>` : '';
+    const descHtml = meta.description
+        ? `<p class="movie-description">${meta.description}</p>`
+        : '';
+
+    movieInfo.innerHTML = `
+        ${posterHtml}
+        <div class="movie-details">
+            <div class="movie-title-row">
+                <span class="movie-title">${meta.title}</span>
+                ${ratingHtml}
+            </div>
+            <div class="movie-meta-row">${yearHtml}</div>
+            ${descHtml}
+        </div>`;
+    movieInfo.style.display = 'flex';
+}
+
 function renderVideoItem(video, index) {
     const isActive = state.currentVideo && state.currentVideo.path === video.path;
     const playableClass = video.playable ? '' : 'not-playable';
@@ -282,12 +391,18 @@ function renderVideoItem(video, index) {
     const subsBadge = video.subtitles && video.subtitles.length > 0
         ? `<span class="meta-subs" title="${video.subtitles.map(s => s.label).join(', ')}">CC ${video.subtitles.length > 1 ? video.subtitles.length : ''}</span>`
         : '';
+    const durationBadge = video.duration_seconds
+        ? `<span class="meta-duration">${formatDuration(video.duration_seconds)}</span>`
+        : '';
+    const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
+    const thumbHtml = `<img class="video-thumb" src="${state.tunnelUrl}/thumb/${encodedPath}" loading="lazy" onerror="this.style.display='none'" alt="">`;
 
     return `
         <div class="video-item ${isActive ? 'active' : ''} ${playableClass}"
              onclick="playVideo(${index})" data-index="${index}">
             <div class="video-item-icon">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                ${thumbHtml}
+                <svg class="video-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="5 3 19 12 5 21 5 3"/>
                 </svg>
                 ${warningBadge}
@@ -297,6 +412,7 @@ function renderVideoItem(video, index) {
                 <div class="video-item-meta">
                     <span class="meta-size">${video.size_display}</span>
                     <span class="meta-ext">${extBadge}</span>
+                    ${durationBadge}
                     ${subsBadge}
                 </div>
             </div>
@@ -307,7 +423,7 @@ function renderVideoItem(video, index) {
 // Video Playback
 // ============================================================
 
-function playVideo(index) {
+async function playVideo(index) {
     const video = state.filteredVideos[index];
     if (!video) return;
 
@@ -316,6 +432,14 @@ function playVideo(index) {
     } else {
         hideFormatWarning();
     }
+
+    // Clear previous progress interval
+    if (state.progressInterval) {
+        clearInterval(state.progressInterval);
+        state.progressInterval = null;
+    }
+    hideResumeBanner();
+    if (movieInfo) movieInfo.style.display = 'none';
 
     state.currentVideo = video;
 
@@ -352,9 +476,23 @@ function playVideo(index) {
     }
 
     videoPlayer.load();
-    videoPlayer.play().catch(err => {
-        console.error('Playback error:', err);
-    });
+
+    // Check watch progress before playing
+    const savedPosition = await loadProgress(video.path);
+    const duration = video.duration_seconds;
+    const minPos = 30;
+    const maxFraction = duration ? duration * 0.95 : Infinity;
+    if (savedPosition && savedPosition > minPos && savedPosition < maxFraction) {
+        showResumeBanner(savedPosition);
+        // Don't autoplay yet - user chooses via banner
+    } else {
+        videoPlayer.play().catch(err => {
+            console.error('Playback error:', err);
+        });
+    }
+
+    // Save progress every 10 seconds
+    state.progressInterval = setInterval(() => saveProgress(video.path), 10000);
 
     videoOverlay.classList.add('hidden');
     nowPlayingTitle.textContent = video.name;
@@ -372,6 +510,9 @@ function playVideo(index) {
             activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
     }, 100);
+
+    // Load TMDB metadata in background
+    loadMovieMetadata(video);
 }
 
 function playNext() {
@@ -511,7 +652,15 @@ document.addEventListener('keydown', (e) => {
 // ============================================================
 
 videoPlayer.addEventListener('ended', () => {
+    if (state.progressInterval) {
+        clearInterval(state.progressInterval);
+        state.progressInterval = null;
+    }
     playNext();
+});
+
+videoPlayer.addEventListener('pause', () => {
+    if (state.currentVideo) saveProgress(state.currentVideo.path);
 });
 
 videoPlayer.addEventListener('error', () => {

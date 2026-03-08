@@ -22,6 +22,10 @@ import shutil
 import threading
 import subprocess
 import urllib.parse
+import urllib.request
+import urllib.error
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -652,10 +656,11 @@ class AutoConverter:
 class VideoScanner:
     """Recursively scans a folder for video files."""
 
-    def __init__(self, video_folder, supported_extensions, browser_playable):
+    def __init__(self, video_folder, supported_extensions, browser_playable, metadata_cache=None):
         self.video_folder = Path(video_folder)
         self.supported_extensions = [ext.lower() for ext in supported_extensions]
         self.browser_playable = [ext.lower() for ext in browser_playable]
+        self.metadata_cache = metadata_cache
 
     def scan(self):
         """Scan video folder and return list of video dicts.
@@ -723,6 +728,10 @@ class VideoScanner:
                     "path": str(legacy_vtt.relative_to(self.video_folder)).replace("\\", "/"),
                 })
 
+            duration = None
+            if self.metadata_cache:
+                duration = self.metadata_cache.get_duration(self.video_folder, file_path)
+
             videos.append({
                 "name": file_path.stem,
                 "filename": file_path.name,
@@ -733,6 +742,7 @@ class VideoScanner:
                 "playable": ext in self.browser_playable,
                 "folder": folder,
                 "subtitles": subs_list if subs_list else None,
+                "duration_seconds": duration,
             })
 
         return videos
@@ -750,6 +760,344 @@ class VideoScanner:
 
 
 # ============================================================
+# Metadata Cache - video duration via ffprobe
+# ============================================================
+
+class MetadataCache:
+    """Caches video duration extracted via ffprobe into metadata_cache.json."""
+
+    def __init__(self, cache_path, ffprobe_path):
+        self.cache_path = Path(cache_path)
+        self.ffprobe_path = ffprobe_path
+        self._lock = threading.Lock()
+        self._data = self._load()
+
+    def _load(self):
+        if self.cache_path.exists():
+            try:
+                with open(self.cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save(self):
+        try:
+            with open(self.cache_path, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[META] Failed to save cache: {e}")
+
+    def get_duration(self, video_folder, file_path):
+        """Return duration in seconds for file_path, running ffprobe if not cached."""
+        rel = str(Path(file_path).relative_to(video_folder)).replace("\\", "/")
+        with self._lock:
+            entry = self._data.get(rel)
+            if entry:
+                return entry.get("duration")
+
+        # Not cached - run ffprobe
+        duration = self._probe_duration(file_path)
+        with self._lock:
+            self._data[rel] = {
+                "duration": duration,
+                "cached_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._save()
+        return duration
+
+    def _probe_duration(self, file_path):
+        if not self.ffprobe_path:
+            return None
+        try:
+            result = subprocess.run(
+                [self.ffprobe_path, "-v", "quiet",
+                 "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(file_path)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            )
+            val = result.stdout.strip()
+            return float(val) if val else None
+        except Exception:
+            return None
+
+
+# ============================================================
+# Thumbnail Generator - one JPEG frame per video via ffmpeg
+# ============================================================
+
+class ThumbnailGenerator:
+    """Generates thumbnail JPEGs in background using ffmpeg."""
+
+    def __init__(self, thumbnails_dir, ffmpeg_path, metadata_cache):
+        self.thumbnails_dir = Path(thumbnails_dir)
+        self.thumbnails_dir.mkdir(parents=True, exist_ok=True)
+        self.ffmpeg_path = ffmpeg_path
+        self.metadata_cache = metadata_cache
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="thumb")
+
+    def thumb_path(self, video_folder, file_path):
+        rel = Path(file_path).relative_to(video_folder)
+        return self.thumbnails_dir / rel.with_suffix(".jpg")
+
+    def generate_all_missing(self, videos, video_folder):
+        """Submit thumbnail generation for all videos missing a thumbnail."""
+        if not self.ffmpeg_path:
+            return
+        video_folder = Path(video_folder)
+        for v in videos:
+            file_path = video_folder / v["path"]
+            out_path = self.thumb_path(video_folder, file_path)
+            if not out_path.exists():
+                duration = v.get("duration_seconds")
+                self._executor.submit(self._generate_one, file_path, video_folder, duration)
+
+    def _generate_one(self, file_path, video_folder, duration):
+        out_path = self.thumb_path(video_folder, file_path)
+        if out_path.exists():
+            return
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = max(10, int((duration or 600) * 0.1))
+        cmd = [
+            self.ffmpeg_path,
+            "-ss", str(timestamp),
+            "-i", str(file_path),
+            "-vframes", "1",
+            "-q:v", "3",
+            "-vf", "scale=320:-1",
+            "-y",
+            str(out_path),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=60)
+        except Exception:
+            if out_path.exists():
+                out_path.unlink()
+
+
+# ============================================================
+# Progress Store - watch progress per video
+# ============================================================
+
+class ProgressStore:
+    """Thread-safe JSON store for per-video watch progress."""
+
+    def __init__(self, store_path):
+        self.store_path = Path(store_path)
+        self._lock = threading.Lock()
+        self._data = self._load()
+
+    def _load(self):
+        if self.store_path.exists():
+            try:
+                with open(self.store_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save(self):
+        try:
+            with open(self.store_path, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[PROGRESS] Failed to save: {e}")
+
+    def save(self, path, position):
+        with self._lock:
+            self._data[path] = {"position": position, "updated_at": datetime.now(timezone.utc).isoformat()}
+            self._save()
+
+    def get(self, path):
+        with self._lock:
+            entry = self._data.get(path)
+            return entry["position"] if entry else None
+
+
+# ============================================================
+# Metadata Fetcher - TMDB movie info in background
+# ============================================================
+
+class MetadataFetcher:
+    """Fetches movie metadata (poster, description, rating) from TMDB API."""
+
+    QUALITY_RE = re.compile(
+        r"[\._](4k|2160p|1080p|720p|480p|bluray|blu-ray|bdrip|webrip|web-dl|"
+        r"hdtv|dvdrip|dvd|hdrip|hevc|x264|x265|h264|h265|xvid|divx|"
+        r"dts|ac3|aac|mp3|truehd|atmos|hdr|sdr|dovi|repack|proper|extended|"
+        r"theatrical|directors|unrated|limited|retail|internal|readnfo|"
+        r"yts|yify|rarbg|ettv|fgt|[a-z0-9]{3,10}-[a-z0-9]+).*$",
+        re.IGNORECASE,
+    )
+
+    def __init__(self, db_path, posters_dir, api_key):
+        self.db_path = Path(db_path)
+        self.posters_dir = Path(posters_dir)
+        self.posters_dir.mkdir(parents=True, exist_ok=True)
+        self.api_key = api_key
+        self._lock = threading.Lock()
+        self._db = self._load_db()
+        self._thread = None
+        self._stop = threading.Event()
+
+    def _load_db(self):
+        if self.db_path.exists():
+            try:
+                with open(self.db_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_db(self):
+        try:
+            with open(self.db_path, "w", encoding="utf-8") as f:
+                json.dump(self._db, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[TMDB] Failed to save db: {e}")
+
+    def get(self, path):
+        with self._lock:
+            return self._db.get(path)
+
+    def clean_title(self, filename):
+        """Extract clean title and year from messy video filename."""
+        name = Path(filename).stem
+        # Extract year
+        year = None
+        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
+        if year_match:
+            year = int(year_match.group(1))
+
+        # Replace dots/underscores with spaces
+        name = re.sub(r"[._]", " ", name)
+
+        # Cut off at year or quality keywords
+        if year_match:
+            name = name[:year_match.start()]
+        else:
+            # Try cutting at quality keywords (space-separated now)
+            quality_space = re.search(
+                r"\b(4k|2160p|1080p|720p|480p|bluray|blu ray|bdrip|webrip|web dl|"
+                r"hdtv|dvdrip|hevc|x264|x265|h264|h265|xvid|divx|repack|extended)\b",
+                name, re.IGNORECASE,
+            )
+            if quality_space:
+                name = name[:quality_space.start()]
+
+        return name.strip(), year
+
+    def _tmdb_request(self, url):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    def _download_poster(self, poster_path):
+        """Download poster image and return local filename."""
+        poster_hash = hashlib.md5(poster_path.encode()).hexdigest()
+        local_file = self.posters_dir / f"{poster_hash}.jpg"
+        if local_file.exists():
+            return f"{poster_hash}.jpg"
+        url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                local_file.write_bytes(resp.read())
+            return f"{poster_hash}.jpg"
+        except Exception:
+            return None
+
+    def _fetch_one(self, video_path, filename):
+        title, year = self.clean_title(filename)
+        if not title:
+            return
+        query = urllib.parse.quote(title)
+        url = f"https://api.themoviedb.org/3/search/movie?api_key={self.api_key}&query={query}"
+        if year:
+            url += f"&year={year}"
+        data = self._tmdb_request(url)
+        if not data or not data.get("results"):
+            return
+        movie = data["results"][0]
+        poster_file = None
+        if movie.get("poster_path"):
+            poster_file = self._download_poster(movie["poster_path"])
+        entry = {
+            "tmdb_id": movie.get("id"),
+            "title": movie.get("title", title),
+            "year": year or (int(movie["release_date"][:4]) if movie.get("release_date") else None),
+            "rating": round(movie.get("vote_average", 0), 1),
+            "description": movie.get("overview", ""),
+            "poster_file": poster_file,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with self._lock:
+            self._db[video_path] = entry
+            self._save_db()
+        print(f"[TMDB] Fetched: {entry['title']} ({entry['year']})")
+
+    def fetch_all(self, videos):
+        """Start background thread to fetch metadata for all unfetched videos."""
+        if not self.api_key:
+            return
+        def _run():
+            for v in videos:
+                if self._stop.is_set():
+                    break
+                with self._lock:
+                    already = v["path"] in self._db
+                if already:
+                    continue
+                try:
+                    self._fetch_one(v["path"], v["filename"])
+                except Exception as e:
+                    print(f"[TMDB] Error for {v['path']}: {e}")
+                time.sleep(0.35)  # TMDB rate limit: 40 req/10s
+        self._thread = threading.Thread(target=_run, daemon=True, name="tmdb-fetch")
+        self._thread.start()
+
+    def add_new_videos(self, new_videos):
+        """Fetch metadata for any new videos not yet in db."""
+        if not self.api_key:
+            return
+        with self._lock:
+            missing = [v for v in new_videos if v["path"] not in self._db]
+        if not missing:
+            return
+        def _run():
+            for v in missing:
+                if self._stop.is_set():
+                    break
+                try:
+                    self._fetch_one(v["path"], v["filename"])
+                except Exception as e:
+                    print(f"[TMDB] Error for {v['path']}: {e}")
+                time.sleep(0.35)
+        threading.Thread(target=_run, daemon=True, name="tmdb-new").start()
+
+    def cleanup(self, current_paths):
+        """Remove db entries and poster files for videos no longer on disk."""
+        with self._lock:
+            removed = [p for p in self._db if p not in current_paths]
+            for path in removed:
+                entry = self._db.pop(path)
+                poster_file = entry.get("poster_file")
+                if poster_file:
+                    poster_path = self.posters_dir / poster_file
+                    if poster_path.exists():
+                        poster_path.unlink()
+                print(f"[TMDB] Cleaned up: {path}")
+            if removed:
+                self._save_db()
+
+    def stop(self):
+        self._stop.set()
+
+
+# ============================================================
 # HTTP Request Handler with CORS + Range Support
 # ============================================================
 
@@ -758,6 +1106,10 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
 
     video_list = []
     video_folder = ""
+    thumbnails_dir = None
+    posters_dir = None
+    metadata_fetcher = None
+    progress_store = None
 
     def log_message(self, format, *args):
         method = args[0] if args else ""
@@ -766,8 +1118,8 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Range, Content-Range, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range, Content-Range, Content-Type, Content-Length")
         self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
 
     def do_OPTIONS(self):
@@ -782,6 +1134,13 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self._route_request(head_only=False)
 
+    def do_POST(self):
+        path = urllib.parse.unquote(self.path)
+        if path == "/api/progress":
+            self._handle_post_progress()
+        else:
+            self.send_error(404, "Not Found")
+
     def _route_request(self, head_only=False):
         path = urllib.parse.unquote(self.path)
 
@@ -795,8 +1154,115 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/subs/"):
             relative_path = path[6:]
             self._handle_subtitle(relative_path, head_only)
+        elif path.startswith("/thumb/"):
+            relative_path = path[7:]
+            self._handle_thumb(relative_path, head_only)
+        elif path.startswith("/poster/"):
+            filename = path[8:]
+            self._handle_poster(filename, head_only)
+        elif path.startswith("/api/metadata/"):
+            relative_path = path[14:]
+            self._handle_api_metadata(relative_path, head_only)
+        elif path.startswith("/api/progress/"):
+            relative_path = path[14:]
+            self._handle_api_get_progress(relative_path, head_only)
         else:
             self.send_error(404, "Not Found")
+
+    def _handle_thumb(self, relative_path, head_only=False):
+        if not self.thumbnails_dir:
+            self.send_error(404, "Thumbnails not available")
+            return
+        thumb_dir = Path(self.thumbnails_dir).resolve()
+        full_path = (thumb_dir / relative_path).resolve()
+        if not str(full_path).startswith(str(thumb_dir)):
+            self.send_error(403, "Forbidden")
+            return
+        if not full_path.exists():
+            self.send_error(404, "Thumbnail not found")
+            return
+        data = full_path.read_bytes()
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "max-age=86400")
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(data)
+
+    def _handle_poster(self, filename, head_only=False):
+        if not self.posters_dir:
+            self.send_error(404, "Posters not available")
+            return
+        # Validate filename - no path traversal
+        if "/" in filename or "\\" in filename or ".." in filename:
+            self.send_error(403, "Forbidden")
+            return
+        full_path = Path(self.posters_dir) / filename
+        if not full_path.exists():
+            self.send_error(404, "Poster not found")
+            return
+        data = full_path.read_bytes()
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "max-age=604800")
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(data)
+
+    def _handle_api_metadata(self, relative_path, head_only=False):
+        meta = {}
+        if self.metadata_fetcher:
+            meta = self.metadata_fetcher.get(relative_path) or {}
+        body = json.dumps(meta, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(body)
+
+    def _handle_api_get_progress(self, relative_path, head_only=False):
+        position = None
+        if self.progress_store:
+            position = self.progress_store.get(relative_path)
+        data = {"position": position} if position is not None else {}
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(body)
+
+    def _handle_post_progress(self):
+        if not self.progress_store:
+            self.send_error(503, "Progress store not available")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            data = json.loads(body.decode("utf-8"))
+            path = data.get("path", "")
+            position = float(data.get("position", 0))
+            if not path:
+                self.send_error(400, "Missing path")
+                return
+            self.progress_store.save(path, position)
+            resp = b'{"ok":true}'
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+        except Exception as e:
+            self.send_error(400, str(e))
 
     def _handle_api_videos(self, head_only=False):
         data = {
@@ -1006,11 +1472,47 @@ def main():
         print("       Install with: winget install Gyan.FFmpeg")
     print()
 
+    # Find ffprobe (next to ffmpeg or on PATH)
+    ffprobe_path = None
+    if ffmpeg_path:
+        candidate = Path(ffmpeg_path).parent / "ffprobe.exe"
+        if candidate.exists():
+            ffprobe_path = str(candidate)
+        else:
+            ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path:
+        print(f"[OK] ffprobe found: {ffprobe_path}")
+    else:
+        print("[WARN] ffprobe not found - video duration will be unavailable")
+    print()
+
+    # Metadata cache (duration)
+    server_dir = Path(__file__).parent
+    metadata_cache = MetadataCache(server_dir / "metadata_cache.json", ffprobe_path)
+
+    # Thumbnail generator
+    thumbnails_dir = server_dir / "thumbnails"
+    thumb_gen = ThumbnailGenerator(thumbnails_dir, ffmpeg_path, metadata_cache) if ffmpeg_path else None
+
+    # Progress store
+    progress_store = ProgressStore(server_dir / "progress.json")
+
+    # TMDB metadata fetcher
+    tmdb_key = config.get("tmdb_api_key", "")
+    posters_dir = server_dir / "posters"
+    metadata_fetcher = MetadataFetcher(server_dir / "movies_db.json", posters_dir, tmdb_key)
+    if tmdb_key:
+        print(f"[OK] TMDB API key configured - movie metadata enabled")
+    else:
+        print("[INFO] No TMDB API key in config.json - movie metadata disabled")
+    print()
+
     # Scanner
     scanner = VideoScanner(
         config["video_folder"],
         config["supported_extensions"],
         config["browser_playable"],
+        metadata_cache=metadata_cache,
     )
 
     def rescan_and_update():
@@ -1019,6 +1521,10 @@ def main():
         StreamRequestHandler.video_list = videos
         playable = sum(1 for v in videos if v["playable"])
         print(f"[RESCAN] {len(videos)} videos ({playable} playable)")
+        if thumb_gen:
+            thumb_gen.generate_all_missing(videos, config["video_folder"])
+        if metadata_fetcher:
+            metadata_fetcher.add_new_videos(videos)
 
     # Initial scan
     print(f">> Scanning {config['video_folder']} for video files...")
@@ -1052,10 +1558,19 @@ def main():
         else:
             converter = None
 
+    # Generate thumbnails and fetch TMDB metadata for initial video list
+    if thumb_gen:
+        thumb_gen.generate_all_missing(videos, config["video_folder"])
+    metadata_fetcher.fetch_all(videos)
+
     # Start HTTP server
     print(f">> Starting HTTP server on port {config['server_port']}...")
     StreamRequestHandler.video_list = videos
     StreamRequestHandler.video_folder = config["video_folder"]
+    StreamRequestHandler.thumbnails_dir = str(thumbnails_dir)
+    StreamRequestHandler.posters_dir = str(posters_dir)
+    StreamRequestHandler.metadata_fetcher = metadata_fetcher
+    StreamRequestHandler.progress_store = progress_store
     server = http.server.ThreadingHTTPServer(("0.0.0.0", config["server_port"]), StreamRequestHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -1130,11 +1645,14 @@ def main():
             videos = new_videos
             StreamRequestHandler.video_list = videos
             print(f"[{timestamp}] Video list changed ({len(videos)} videos)")
+            current_paths = {v["path"] for v in videos}
+            metadata_fetcher.cleanup(current_paths)
 
     # Cleanup
     if converter:
         print(">> Stopping auto-converter...")
         converter.stop()
+    metadata_fetcher.stop()
     print(">> Stopping tunnel...")
     tunnel.stop()
     print(">> Stopping server...")

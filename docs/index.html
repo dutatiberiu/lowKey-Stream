@@ -30,6 +30,18 @@
             <button class="warning-close" onclick="hideFormatWarning()">&times;</button>
         </div>
 
+        <!-- RESUME BANNER -->
+        <div class="resume-banner" id="resumeBanner">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+            <span id="resumeText">Continuă din 0:00?</span>
+            <div class="resume-actions">
+                <button class="resume-btn resume-btn-primary" onclick="resumePlayback()">Continuă</button>
+                <button class="resume-btn" onclick="startFromBeginning()">De la început</button>
+            </div>
+        </div>
+
         <!-- MAIN CONTENT -->
         <div class="main-content">
             <!-- LEFT: VIDEO PLAYER -->
@@ -52,6 +64,9 @@
                     <div class="now-playing-meta" id="nowPlayingMeta"></div>
                     <div class="audio-track-selector" id="audioTrackSelector" style="display:none;"></div>
                 </div>
+
+                <!-- MOVIE INFO (TMDB) -->
+                <div class="movie-info" id="movieInfo" style="display:none;"></div>
             </main>
 
             <!-- RIGHT: VIDEO LIST SIDEBAR -->

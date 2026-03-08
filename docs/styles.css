@@ -548,15 +548,8 @@ body {
     opacity: 0.8;
 }
 
-/* Video item icon */
+/* Video item icon — sized in thumbnail section below */
 .video-item-icon {
-    position: relative;
-    width: 36px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
     color: var(--text-secondary);
 }
 
@@ -838,4 +831,175 @@ body {
     50% {
         opacity: 0.5;
     }
+}
+
+/* ===== RESUME BANNER ===== */
+.resume-banner {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    background: rgba(200, 255, 0, 0.07);
+    border-bottom: 1px solid rgba(200, 255, 0, 0.2);
+    color: var(--accent);
+    font-size: 13px;
+    font-family: 'Space Mono', monospace;
+}
+
+.resume-banner.visible {
+    display: flex;
+}
+
+.resume-banner svg {
+    flex-shrink: 0;
+}
+
+.resume-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.resume-btn {
+    padding: 5px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: 'Space Mono', monospace;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.resume-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.resume-btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}
+
+.resume-btn-primary:hover {
+    background: #d4ff33;
+    color: #000;
+    border-color: #d4ff33;
+}
+
+/* ===== THUMBNAIL IN SIDEBAR ===== */
+.video-item-icon {
+    position: relative;
+    width: 60px;
+    height: 34px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--surface-2);
+}
+
+.video-thumb {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 4px;
+    z-index: 2;
+}
+
+.video-icon-svg {
+    position: relative;
+    z-index: 1;
+    color: var(--text-secondary);
+}
+
+/* ===== DURATION BADGE ===== */
+.meta-duration {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: 'Space Mono', monospace;
+}
+
+/* ===== MOVIE INFO (TMDB) ===== */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.movie-info {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-top: 12px;
+    background: var(--surface);
+    animation: fadeIn 0.3s ease;
+}
+
+.movie-poster {
+    width: 90px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    object-fit: cover;
+    align-self: flex-start;
+}
+
+.movie-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.movie-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.movie-title {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    color: #fff;
+}
+
+.movie-rating {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+.movie-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.movie-year {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.movie-description {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 0;
 }

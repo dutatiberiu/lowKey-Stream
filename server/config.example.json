@@ -3,5 +3,6 @@
     "server_port": 8080,
     "supported_extensions": [".mp4", ".mkv", ".avi", ".mov", ".webm"],
     "browser_playable": [".mp4", ".webm"],
-    "health_check_interval": 60
+    "health_check_interval": 60,
+    "tmdb_api_key": ""
 }
