@@ -532,8 +532,16 @@ class AutoConverter:
     @staticmethod
     def _srt_to_vtt(srt_path, vtt_path):
         """Convert SRT subtitle file to WebVTT format."""
-        with open(srt_path, "r", encoding="utf-8-sig") as f:
-            content = f.read()
+        content = None
+        for enc in ("utf-8-sig", "latin-1"):
+            try:
+                with open(srt_path, "r", encoding=enc) as f:
+                    content = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        if content is None:
+            raise ValueError(f"Could not decode {srt_path} with any known encoding")
         # WebVTT uses . instead of , for milliseconds
         content = content.replace(",", ".")
         with open(vtt_path, "w", encoding="utf-8") as f:
