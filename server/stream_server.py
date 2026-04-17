@@ -1049,13 +1049,24 @@ class MetadataFetcher:
         local_file = self.posters_dir / f"{poster_hash}.jpg"
         if local_file.exists():
             return f"{poster_hash}.jpg"
+        
+        # Ensure posters directory exists
+        local_file.parent.mkdir(parents=True, exist_ok=True)
+        
         url = f"https://image.tmdb.org/t/p/w500{poster_path}"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 local_file.write_bytes(resp.read())
-            return f"{poster_hash}.jpg"
-        except Exception:
+                return f"{poster_hash}.jpg"
+        except urllib.error.HTTPError as e:
+            print(f"[TMDB] Poster download HTTP error: {url} - {e.code} {e.reason}")
+            return None
+        except urllib.error.URLError as e:
+            print(f"[TMDB] Poster download URL error: {url} - {e.reason}")
+            return None
+        except Exception as e:
+            print(f"[TMDB] Poster download failed: {url} - {type(e).__name__}: {e}")
             return None
 
     def _fetch_one(self, video_path, filename):
