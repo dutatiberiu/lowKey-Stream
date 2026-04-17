@@ -1150,8 +1150,13 @@ class MetadataFetcher:
             item_year = year or (int(date_field[:4]) if date_field else None)
 
         poster_file = None
-        if item.get("poster_path"):
-            poster_file = self._download_poster(item["poster_path"])
+        poster_path = item.get("poster_path")
+        if poster_path:
+            print(f"[TMDB] Found poster_path: {poster_path}")
+            poster_file = self._download_poster(poster_path)
+            print(f"[TMDB] Poster download result: {poster_file}")
+        else:
+            print(f"[TMDB] No poster_path for: {item_title}")
         entry = {
             "tmdb_id": item.get("id"),
             "title": item_title,
@@ -1165,13 +1170,17 @@ class MetadataFetcher:
         with self._lock:
             self._db[video_path] = entry
             self._save_db()
-        print(f"[TMDB] Fetched ({'TV' if is_tv else 'movie'}): {entry['title']} ({entry['year']})")
+        print(f"[TMDB] Fetched ({'TV' if is_tv else 'movie'}): {entry['title']} ({entry['year']}) - poster: {poster_file}")
 
     def fetch_all(self, videos):
         """Start background thread to fetch metadata for all unfetched videos."""
         if not self.api_key:
+            print("[TMDB] No API key configured - skipping metadata fetch")
             return
         def _run():
+            count = len(videos)
+            print(f"[TMDB] Starting background fetch for {count} videos...")
+            fetched = 0
             for v in videos:
                 if self._stop.is_set():
                     break
@@ -1179,11 +1188,13 @@ class MetadataFetcher:
                     already = v["path"] in self._db
                 if already:
                     continue
+                fetched += 1
                 try:
                     self._fetch_one(v["path"], v["filename"])
                 except Exception as e:
                     print(f"[TMDB] Error for {v['path']}: {e}")
                 time.sleep(0.35)  # TMDB rate limit: 40 req/10s
+            print(f"[TMDB] Background fetch complete: {fetched} videos fetched")
         self._thread = threading.Thread(target=_run, daemon=True, name="tmdb-fetch")
         self._thread.start()
 
@@ -1195,6 +1206,7 @@ class MetadataFetcher:
             missing = [v for v in new_videos if v["path"] not in self._db]
         if not missing:
             return
+        print(f"[TMDB] Starting fetch for {len(missing)} new videos...")
         def _run():
             for v in missing:
                 if self._stop.is_set():
