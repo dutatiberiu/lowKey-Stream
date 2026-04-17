@@ -1045,7 +1045,7 @@ class MetadataFetcher:
             return None
 
     def _download_poster(self, poster_path):
-        """Download poster image and return local filename. THREAD-SAFE with per-file locks."""
+        """Download poster image and return local filename. THREAD-SAFE with retry logic."""
         poster_hash = hashlib.md5(poster_path.encode()).hexdigest()
         local_file = self.posters_dir / f"{poster_hash}.jpg"
         
@@ -1069,42 +1069,65 @@ class MetadataFetcher:
                 return None
             
             url = f"https://image.tmdb.org/t/p/w500{poster_path}"
-            print(f"[TMDB] Downloading poster: {url} -> {local_file.name}")
+            max_retries = 3
             
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = resp.read()
-                    if not data:
-                        print(f"[TMDB] Poster empty response: {local_file.name}")
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"[TMDB] Downloading poster (attempt {attempt}/{max_retries}): {local_file.name}")
+                    req = urllib.request.Request(url, headers={
+                        "User-Agent": "lowKey-Stream/3.0",
+                        "Connection": "close"  # Explicitly close connection to avoid reset issues
+                    })
+                    # Increased timeout from 15 to 25 seconds for slow CDNs
+                    with urllib.request.urlopen(req, timeout=25) as resp:
+                        data = resp.read()
+                        if not data:
+                            print(f"[TMDB] Poster empty response")
+                            if attempt < max_retries:
+                                time.sleep(3)  # Wait before retry
+                                continue
+                            return None
+                        local_file.write_bytes(data)
+                        print(f"[TMDB] Poster saved: {local_file.name} ({len(data)} bytes)")
+                        return f"{poster_hash}.jpg"
+                
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        # Poster doesn't exist on TMDB - no point retrying
+                        print(f"[TMDB] Poster not found on TMDB (404)")
                         return None
-                    local_file.write_bytes(data)
-                    print(f"[TMDB] Poster saved: {local_file.name} ({len(data)} bytes)")
-                    return f"{poster_hash}.jpg"
-            except urllib.error.HTTPError as e:
-                print(f"[TMDB] Poster HTTP error: {url} - {e.code} {e.reason}")
-                if local_file.exists():
-                    try:
-                        local_file.unlink()
-                    except:
-                        pass
-                return None
-            except urllib.error.URLError as e:
-                print(f"[TMDB] Poster URL error: {url} - {e.reason}")
-                if local_file.exists():
-                    try:
-                        local_file.unlink()
-                    except:
-                        pass
-                return None
-            except Exception as e:
-                print(f"[TMDB] Poster download failed: {url} - {type(e).__name__}: {e}")
-                if local_file.exists():
-                    try:
-                        local_file.unlink()
-                    except:
-                        pass
-                return None
+                    elif e.code == 429:
+                        # Rate limited - wait longer and retry
+                        print(f"[TMDB] Rate limited (429), waiting before retry...")
+                        if attempt < max_retries:
+                            time.sleep(10)  # Wait 10 seconds if rate limited
+                            continue
+                    print(f"[TMDB] Poster HTTP error: {e.code} {e.reason}")
+                    if attempt < max_retries:
+                        time.sleep(3)
+                        continue
+                    return None
+                
+                except (urllib.error.URLError, ConnectionResetError, ConnectionAbortedError, TimeoutError, BrokenPipeError) as e:
+                    print(f"[TMDB] Network error (attempt {attempt}): {type(e).__name__}")
+                    if attempt < max_retries:
+                        time.sleep(4)  # Longer wait for network errors
+                        continue
+                    return None
+                
+                except Exception as e:
+                    print(f"[TMDB] Error (attempt {attempt}): {type(e).__name__}: {str(e)[:100]}")
+                    if attempt < max_retries:
+                        time.sleep(2)
+                        continue
+                    if local_file.exists():
+                        try:
+                            local_file.unlink()
+                        except:
+                            pass
+                    return None
+            
+            return None
 
     def _fetch_one(self, video_path, filename):
         title, year, is_tv = self.clean_title(filename)
@@ -1191,21 +1214,44 @@ class MetadataFetcher:
                     entry = self._db.get(v_path)
                 
                 if entry:
-                    # Already in DB - check if poster file actually exists on disk
+                    # Already in DB - check if poster is complete
                     poster_file = entry.get("poster_file")
+                    
+                    # Case 1: Has poster_file and it exists on disk - SKIP
                     if poster_file:
                         poster_path = self.posters_dir / poster_file
                         if poster_path.exists():
-                            # Already have complete entry with poster on disk
                             continue
                         else:
-                            # Entry says poster_file but file missing - remove from DB to re-fetch
-                            print(f"[TMDB] Poster file missing on disk ({poster_file}), re-fetching: {entry.get('title', v['filename'])}")
+                            # Poster file missing - remove from DB to re-fetch
+                            print(f"[TMDB] Poster file missing on disk, re-fetching: {entry.get('title', v['filename'])}")
                             with self._lock:
                                 self._db.pop(v_path, None)
-                                self._save_db()  # Save DB immediately to remove stale entry
+                                self._save_db()
+                    # Case 2: poster_file is None - might be network error, retry download
                     else:
-                        # In DB but no poster - might not have poster on TMDB, skip
+                        # Decided: Retry videos with null poster in case it was network error
+                        # But only if entry is old (more than 1 hour). Otherwise skip to avoid spam.
+                        fetched_at = entry.get("fetched_at", "")
+                        if fetched_at:
+                            try:
+                                fetch_time = datetime.fromisoformat(fetched_at.replace('Z', '+00:00'))
+                                age_hours = (datetime.now(timezone.utc) - fetch_time).total_seconds() / 3600
+                                if age_hours < 1:
+                                    # Recently fetched, probably no poster on TMDB - skip
+                                    continue
+                            except:
+                                pass
+                        # Old entry or couldn't parse - try to re-fetch poster
+                        print(f"[TMDB] Retrying poster for: {entry.get('title', v['filename'])}")
+                        with self._lock:
+                            self._db.pop(v_path, None)
+                        fetched += 1
+                        try:
+                            self._fetch_one(v_path, v["filename"])
+                        except Exception as e:
+                            print(f"[TMDB] Error for {v_path}: {e}")
+                        time.sleep(0.35)
                         continue
                 
                 fetched += 1
@@ -1213,7 +1259,9 @@ class MetadataFetcher:
                     self._fetch_one(v_path, v["filename"])
                 except Exception as e:
                     print(f"[TMDB] Error for {v_path}: {e}")
-                time.sleep(0.35)  # TMDB rate limit: 40 req/10s
+                # Conservative rate limiting: TMDB allows 40 req/10s but with retries we need more spacing
+                # Using 0.5s = 2 req/sec = 20 req/10s (safer margin, doubles the delay from before)
+                time.sleep(0.5)
             print(f"[TMDB] Background fetch complete: {fetched} videos fetched")
         self._thread = threading.Thread(target=_run, daemon=True, name="tmdb-fetch")
         self._thread.start()
@@ -1251,7 +1299,8 @@ class MetadataFetcher:
                     self._fetch_one(v["path"], v["filename"])
                 except Exception as e:
                     print(f"[TMDB] Error for {v['path']}: {e}")
-                time.sleep(0.35)
+                # Conservative rate limiting (same as fetch_all)
+                time.sleep(0.5)
         threading.Thread(target=_run, daemon=True, name="tmdb-new").start()
 
     def cleanup(self, current_paths):
