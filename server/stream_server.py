@@ -1184,15 +1184,34 @@ class MetadataFetcher:
             for v in videos:
                 if self._stop.is_set():
                     break
+                v_path = v["path"]
+                
+                # Check if video is in DB AND has valid poster file on disk
                 with self._lock:
-                    already = v["path"] in self._db
-                if already:
-                    continue
+                    entry = self._db.get(v_path)
+                
+                if entry:
+                    # Already in DB - check if poster file actually exists on disk
+                    poster_file = entry.get("poster_file")
+                    if poster_file:
+                        poster_path = self.posters_dir / poster_file
+                        if poster_path.exists():
+                            # Already have complete entry with poster on disk
+                            continue
+                        else:
+                            # Entry says poster_file but file missing - remove from DB to re-fetch
+                            print(f"[TMDB] Poster file missing on disk ({poster_file}), re-fetching: {entry.get('title', v['filename'])}")
+                            with self._lock:
+                                self._db.pop(v_path, None)
+                    else:
+                        # In DB but no poster - might not have poster on TMDB, skip
+                        continue
+                
                 fetched += 1
                 try:
-                    self._fetch_one(v["path"], v["filename"])
+                    self._fetch_one(v_path, v["filename"])
                 except Exception as e:
-                    print(f"[TMDB] Error for {v['path']}: {e}")
+                    print(f"[TMDB] Error for {v_path}: {e}")
                 time.sleep(0.35)  # TMDB rate limit: 40 req/10s
             print(f"[TMDB] Background fetch complete: {fetched} videos fetched")
         self._thread = threading.Thread(target=_run, daemon=True, name="tmdb-fetch")
@@ -1203,10 +1222,26 @@ class MetadataFetcher:
         if not self.api_key:
             return
         with self._lock:
-            missing = [v for v in new_videos if v["path"] not in self._db]
+            missing = []
+            for v in new_videos:
+                v_path = v["path"]
+                entry = self._db.get(v_path)
+                
+                if entry:
+                    # Check if poster file actually exists on disk
+                    poster_file = entry.get("poster_file")
+                    if poster_file:
+                        poster_path = self.posters_dir / poster_file
+                        if not poster_path.exists():
+                            # Poster file missing - mark for re-fetch
+                            missing.append(v)
+                else:
+                    # New video
+                    missing.append(v)
+        
         if not missing:
             return
-        print(f"[TMDB] Starting fetch for {len(missing)} new videos...")
+        print(f"[TMDB] Starting fetch for {len(missing)} new/invalid videos...")
         def _run():
             for v in missing:
                 if self._stop.is_set():
