@@ -1254,7 +1254,9 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, "Thumbnails not available")
             return
         thumb_dir = Path(self.thumbnails_dir).resolve()
-        full_path = (thumb_dir / relative_path).resolve()
+        # Convert video extension to .jpg for thumbnail
+        thumb_path = Path(relative_path).with_suffix(".jpg")
+        full_path = (thumb_dir / str(thumb_path)).resolve()
         if not str(full_path).startswith(str(thumb_dir)):
             self.send_error(403, "Forbidden")
             return
