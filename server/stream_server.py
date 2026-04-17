@@ -1203,6 +1203,7 @@ class MetadataFetcher:
                             print(f"[TMDB] Poster file missing on disk ({poster_file}), re-fetching: {entry.get('title', v['filename'])}")
                             with self._lock:
                                 self._db.pop(v_path, None)
+                                self._save_db()  # Save DB immediately to remove stale entry
                     else:
                         # In DB but no poster - might not have poster on TMDB, skip
                         continue
