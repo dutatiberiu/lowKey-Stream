@@ -989,14 +989,18 @@ class MetadataFetcher:
                     data = json.load(f)
                     # Clean up stale entries with missing poster files
                     cleaned = {}
+                    removed = []
                     for v_path, entry in data.items():
                         poster_file = entry.get("poster_file")
                         if poster_file:
                             poster_path = self.posters_dir / poster_file
                             if not poster_path.exists():
-                                # Poster file missing - mark for re-fetch by removing poster_file
-                                entry["poster_file"] = None
+                                # Poster file missing on disk - REMOVE ENTRY entirely to force re-fetch
+                                removed.append(v_path)
+                                continue
                         cleaned[v_path] = entry
+                    if removed:
+                        print(f"[TMDB] Cleaned {len(removed)} stale DB entries with missing posters")
                     return cleaned
             except Exception:
                 pass
