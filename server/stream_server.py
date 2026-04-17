@@ -865,7 +865,12 @@ class ThumbnailGenerator:
         if out_path.exists():
             return
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = max(10, int((duration or 600) * 0.1))
+        
+        # Validate duration - if none, use 600 as default
+        if duration is None or duration <= 0:
+            duration = 600
+        timestamp = max(10, int(duration * 0.1))
+        
         cmd = [
             self.ffmpeg_path,
             "-ss", str(timestamp),
@@ -877,8 +882,36 @@ class ThumbnailGenerator:
             str(out_path),
         ]
         try:
-            subprocess.run(cmd, capture_output=True, timeout=60)
-        except Exception:
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                encoding="utf-8", 
+                errors="replace",
+                timeout=60
+            )
+            if result.returncode == 0 and out_path.exists():
+                # Success - thumbnail generated
+                return
+            else:
+                # ffmpeg failed
+                rel_path = file_path.relative_to(video_folder)
+                print(f"[THUMB] Failed to generate: {rel_path}")
+                if result.stderr:
+                    errors = result.stderr.strip().split("\n")[-3:]
+                    for line in errors:
+                        if line.strip():
+                            print(f"        {line}")
+                if out_path.exists():
+                    out_path.unlink()
+        except subprocess.TimeoutExpired:
+            rel_path = file_path.relative_to(video_folder)
+            print(f"[THUMB] Timeout generating: {rel_path}")
+            if out_path.exists():
+                out_path.unlink()
+        except Exception as e:
+            rel_path = file_path.relative_to(video_folder)
+            print(f"[THUMB] Error generating: {rel_path} - {e}")
             if out_path.exists():
                 out_path.unlink()
 
