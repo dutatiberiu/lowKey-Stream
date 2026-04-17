@@ -977,6 +977,7 @@ class MetadataFetcher:
         self.posters_dir.mkdir(parents=True, exist_ok=True)
         self.api_key = api_key
         self._lock = threading.Lock()
+        self._poster_locks = {}  # Per-file locks for thread-safe downloads
         self._db = self._load_db()
         self._thread = None
         self._stop = threading.Event()
@@ -1044,43 +1045,66 @@ class MetadataFetcher:
             return None
 
     def _download_poster(self, poster_path):
-        """Download poster image and return local filename."""
+        """Download poster image and return local filename. THREAD-SAFE with per-file locks."""
         poster_hash = hashlib.md5(poster_path.encode()).hexdigest()
         local_file = self.posters_dir / f"{poster_hash}.jpg"
-        if local_file.exists():
-            return f"{poster_hash}.jpg"
         
-        # Ensure posters directory exists
-        try:
-            local_file.parent.mkdir(parents=True, exist_ok=True)
-            print(f"[TMDB] Posters dir ready: {local_file.parent}")
-        except Exception as e:
-            print(f"[TMDB] Failed to create posters dir: {e}")
-            return None
+        # GET OR CREATE FILE-SPECIFIC LOCK (thread-safe)
+        with self._lock:
+            if poster_hash not in self._poster_locks:
+                self._poster_locks[poster_hash] = threading.Lock()
+            file_lock = self._poster_locks[poster_hash]
         
-        url = f"https://image.tmdb.org/t/p/w500{poster_path}"
-        print(f"[TMDB] Downloading poster: {url} -> {local_file.name}")
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = resp.read()
-                local_file.write_bytes(data)
-                print(f"[TMDB] Poster saved: {local_file.name} ({len(data)} bytes)")
-                return f"{poster_hash}.jpg"
-        except urllib.error.HTTPError as e:
-            print(f"[TMDB] Poster HTTP error: {url} - {e.code} {e.reason}")
-            return None
-        except urllib.error.URLError as e:
-            print(f"[TMDB] Poster URL error: {url} - {e.reason}")
-            return None
-        except Exception as e:
-            print(f"[TMDB] Poster download failed: {url} - {type(e).__name__}: {e}")
+        # ACQUIRE LOCK FOR THIS SPECIFIC FILE
+        with file_lock:
+            # Double-check: file might have been downloaded by another thread
             if local_file.exists():
-                try:
-                    local_file.unlink()
-                except:
-                    pass
-            return None
+                return f"{poster_hash}.jpg"
+            
+            # Ensure posters directory exists
+            try:
+                local_file.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"[TMDB] Failed to create posters dir: {e}")
+                return None
+            
+            url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+            print(f"[TMDB] Downloading poster: {url} -> {local_file.name}")
+            
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = resp.read()
+                    if not data:
+                        print(f"[TMDB] Poster empty response: {local_file.name}")
+                        return None
+                    local_file.write_bytes(data)
+                    print(f"[TMDB] Poster saved: {local_file.name} ({len(data)} bytes)")
+                    return f"{poster_hash}.jpg"
+            except urllib.error.HTTPError as e:
+                print(f"[TMDB] Poster HTTP error: {url} - {e.code} {e.reason}")
+                if local_file.exists():
+                    try:
+                        local_file.unlink()
+                    except:
+                        pass
+                return None
+            except urllib.error.URLError as e:
+                print(f"[TMDB] Poster URL error: {url} - {e.reason}")
+                if local_file.exists():
+                    try:
+                        local_file.unlink()
+                    except:
+                        pass
+                return None
+            except Exception as e:
+                print(f"[TMDB] Poster download failed: {url} - {type(e).__name__}: {e}")
+                if local_file.exists():
+                    try:
+                        local_file.unlink()
+                    except:
+                        pass
+                return None
 
     def _fetch_one(self, video_path, filename):
         title, year, is_tv = self.clean_title(filename)
