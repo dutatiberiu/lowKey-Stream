@@ -986,7 +986,18 @@ class MetadataFetcher:
         if self.db_path.exists():
             try:
                 with open(self.db_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # Clean up stale entries with missing poster files
+                    cleaned = {}
+                    for v_path, entry in data.items():
+                        poster_file = entry.get("poster_file")
+                        if poster_file:
+                            poster_path = self.posters_dir / poster_file
+                            if not poster_path.exists():
+                                # Poster file missing - mark for re-fetch by removing poster_file
+                                entry["poster_file"] = None
+                        cleaned[v_path] = entry
+                    return cleaned
             except Exception:
                 pass
         return {}
@@ -1140,12 +1151,20 @@ class MetadataFetcher:
                 title_lower = title.lower()
                 for existing in self._db.values():
                     if existing.get("is_tv") and existing.get("title", "").lower() == title_lower:
-                        reused = dict(existing)
-                        reused["fetched_at"] = datetime.now(timezone.utc).isoformat()
-                        self._db[video_path] = reused
-                        self._save_db()
-                        print(f"[TMDB] Reused: {reused['title']} for {filename}")
-                        return
+                        poster_file = existing.get("poster_file")
+                        # Check if poster actually exists on disk
+                        if poster_file:
+                            poster_path = self.posters_dir / poster_file
+                            if poster_path.exists():
+                                # Full reuse - poster exists
+                                reused = dict(existing)
+                                reused["fetched_at"] = datetime.now(timezone.utc).isoformat()
+                                self._db[video_path] = reused
+                                self._save_db()
+                                print(f"[TMDB] Reused: {reused['title']} for {filename}")
+                                return
+                        # Poster missing or null - continue to fetch and try to download
+                        break
 
         query = urllib.parse.quote(title)
 
