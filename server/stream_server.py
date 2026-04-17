@@ -1051,22 +1051,35 @@ class MetadataFetcher:
             return f"{poster_hash}.jpg"
         
         # Ensure posters directory exists
-        local_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            local_file.parent.mkdir(parents=True, exist_ok=True)
+            print(f"[TMDB] Posters dir ready: {local_file.parent}")
+        except Exception as e:
+            print(f"[TMDB] Failed to create posters dir: {e}")
+            return None
         
         url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+        print(f"[TMDB] Downloading poster: {url} -> {local_file.name}")
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "lowKey-Stream/3.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
-                local_file.write_bytes(resp.read())
+                data = resp.read()
+                local_file.write_bytes(data)
+                print(f"[TMDB] Poster saved: {local_file.name} ({len(data)} bytes)")
                 return f"{poster_hash}.jpg"
         except urllib.error.HTTPError as e:
-            print(f"[TMDB] Poster download HTTP error: {url} - {e.code} {e.reason}")
+            print(f"[TMDB] Poster HTTP error: {url} - {e.code} {e.reason}")
             return None
         except urllib.error.URLError as e:
-            print(f"[TMDB] Poster download URL error: {url} - {e.reason}")
+            print(f"[TMDB] Poster URL error: {url} - {e.reason}")
             return None
         except Exception as e:
             print(f"[TMDB] Poster download failed: {url} - {type(e).__name__}: {e}")
+            if local_file.exists():
+                try:
+                    local_file.unlink()
+                except:
+                    pass
             return None
 
     def _fetch_one(self, video_path, filename):
