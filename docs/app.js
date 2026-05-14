@@ -39,7 +39,6 @@ const movieInfo          = document.getElementById('movieInfo');
 const browseView         = document.getElementById('browseView');
 const playerView         = document.getElementById('playerView');
 const browseSectionsEl   = document.getElementById('browseSections');
-const browseSearch       = document.getElementById('browseSearch');
 
 // ISO 639 language code → display name
 const LANG_NAMES = {
@@ -195,12 +194,26 @@ function showPlayerView() {
 // ============================================================
 
 function renderBrowse() {
-    const query = browseSearch.value.trim().toLowerCase();
-    if (query) {
-        renderBrowseSearch(query);
-    } else {
-        renderBrowseSections();
-    }
+    renderBrowseSections();
+}
+
+// Priority order: movies → series → documentaries → rest (alphabetical)
+const SECTION_PRIORITY = [
+    /film|movie/i,
+    /serial|series|show/i,
+    /doc/i,
+];
+
+function sectionPriority(name) {
+    const idx = SECTION_PRIORITY.findIndex(re => re.test(name));
+    return idx === -1 ? SECTION_PRIORITY.length : idx;
+}
+
+function sortSectionNames(names) {
+    return [...names].sort((a, b) => {
+        const diff = sectionPriority(a) - sectionPriority(b);
+        return diff !== 0 ? diff : a.localeCompare(b);
+    });
 }
 
 function renderBrowseSections() {
@@ -216,8 +229,8 @@ function renderBrowseSections() {
         fragments.push(buildFileSectionHtml('Library', root._files, idx));
     }
 
-    // Each top-level subfolder → decide based on whether it has its own subfolders
-    const names = Object.keys(root._subfolders).sort();
+    // Each top-level subfolder → sorted by category priority, then alphabetically
+    const names = sortSectionNames(Object.keys(root._subfolders));
     for (const name of names) {
         const node = root._subfolders[name];
         const hasSubs = Object.keys(node._subfolders).length > 0;
@@ -921,13 +934,7 @@ function escAttr(str) {
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
-    if (state.view === 'browse') {
-        // In browse, focus the search on any printable key
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-            browseSearch.focus();
-        }
-        return;
-    }
+    if (state.view === 'browse') return;
 
     switch (e.code) {
         case 'Space':
@@ -994,7 +1001,6 @@ videoOverlay.addEventListener('click', () => {
 // ============================================================
 
 searchInput.addEventListener('input', () => renderDrill());
-browseSearch.addEventListener('input', () => renderBrowse());
 
 // Periodic health check + refresh (every 2 minutes)
 setInterval(async () => {

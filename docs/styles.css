@@ -1091,9 +1091,9 @@ body {
 /* Horizontal scroll row */
 .browse-cards {
     display: flex;
-    gap: 8px;
+    gap: 14px;
     overflow-x: auto;
-    padding-bottom: 8px;
+    padding-bottom: 10px;
     scroll-snap-type: x proximity;
     -webkit-overflow-scrolling: touch;
 }
@@ -1109,7 +1109,7 @@ body {
 .browse-search-results {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 8px;
+    gap: 14px;
 }
 
 /* ── Poster card ──────────────────────────────────────────── */
@@ -1308,12 +1308,12 @@ body {
     }
 
     .browse-cards {
-        gap: 5px;
+        gap: 8px;
     }
 
     .browse-search-results {
         grid-template-columns: repeat(3, 1fr);
-        gap: 5px;
+        gap: 8px;
     }
 
     .browse-sections {
