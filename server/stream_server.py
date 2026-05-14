@@ -86,6 +86,7 @@ def load_config():
     config.setdefault("supported_extensions", [".mp4", ".mkv", ".avi", ".mov", ".webm"])
     config.setdefault("browser_playable", [".mp4", ".webm"])
     config.setdefault("health_check_interval", 60)
+    config.setdefault("allowed_origin", "*")
 
     video_folder = Path(config["video_folder"])
     if not video_folder.exists():
@@ -114,6 +115,7 @@ class AutoConverter:
         self.converting_now = None  # path of file currently being converted
         self._stop_event = threading.Event()
         self._thread = None
+        self._bitrate_cache = {}  # str(path) -> (mtime, bitrate)
 
     def _find_ffprobe(self):
         """Find ffprobe next to ffmpeg or on PATH."""
@@ -291,7 +293,16 @@ class AutoConverter:
                 continue
             if file_path.name.startswith("_"):
                 continue
-            bitrate = self._get_video_bitrate(file_path)
+            try:
+                mtime = file_path.stat().st_mtime
+            except OSError:
+                continue
+            cached = self._bitrate_cache.get(str(file_path))
+            if cached and cached[0] == mtime:
+                bitrate = cached[1]
+            else:
+                bitrate = self._get_video_bitrate(file_path)
+                self._bitrate_cache[str(file_path)] = (mtime, bitrate)
             if bitrate > self.MAX_BITRATE:
                 needs_compress.append(file_path)
         return needs_compress
@@ -869,7 +880,7 @@ class ThumbnailGenerator:
         # Validate duration - if none, use 600 as default
         if duration is None or duration <= 0:
             duration = 600
-        timestamp = max(10, int(duration * 0.1))
+        timestamp = max(10, min(int(duration * 0.1), max(0, int(duration) - 2)))
         
         cmd = [
             self.ffmpeg_path,
@@ -1094,8 +1105,12 @@ class MetadataFetcher:
                         "Connection": "close"  # Explicitly close connection to avoid reset issues
                     })
                     # Increased timeout from 15 to 25 seconds for slow CDNs
+                    MAX_POSTER_BYTES = 5 * 1024 * 1024  # 5 MB
                     with urllib.request.urlopen(req, timeout=25) as resp:
-                        data = resp.read()
+                        data = resp.read(MAX_POSTER_BYTES + 1)
+                        if len(data) > MAX_POSTER_BYTES:
+                            print(f"[TMDB] Poster too large (>{MAX_POSTER_BYTES // 1024 // 1024} MB), skipping")
+                            return None
                         if not data:
                             print(f"[TMDB] Poster empty response")
                             if attempt < max_retries:
@@ -1358,6 +1373,7 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
     posters_dir = None
     metadata_fetcher = None
     progress_store = None
+    allowed_origin = "*"
 
     def log_message(self, format, *args):
         method = args[0] if args else ""
@@ -1365,7 +1381,7 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
             print(f"[HTTP] {self.address_string()} - {format % args}")
 
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.__class__.allowed_origin)
         self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Range, Content-Range, Content-Type, Content-Length")
         self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
@@ -1496,12 +1512,18 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length > 8192:
+                self.send_error(413, "Request Too Large")
+                return
             body = self.rfile.read(length)
             data = json.loads(body.decode("utf-8"))
             path = data.get("path", "")
             position = float(data.get("position", 0))
             if not path:
                 self.send_error(400, "Missing path")
+                return
+            if not (0.0 <= position <= 360000.0):
+                self.send_error(400, "Invalid position")
                 return
             self.progress_store.save(path, position)
             resp = b'{"ok":true}'
@@ -1821,6 +1843,7 @@ def main():
     StreamRequestHandler.posters_dir = str(posters_dir)
     StreamRequestHandler.metadata_fetcher = metadata_fetcher
     StreamRequestHandler.progress_store = progress_store
+    StreamRequestHandler.allowed_origin = config.get("allowed_origin", "*")
     server = http.server.ThreadingHTTPServer(("0.0.0.0", config["server_port"]), StreamRequestHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
