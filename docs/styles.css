@@ -996,3 +996,335 @@ body {
     overflow: hidden;
     margin: 0;
 }
+
+/* ============================================================
+   BROWSE VIEW (Netflix-style default)
+   ============================================================ */
+
+.browse-view,
+.player-view {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.browse-view.hidden,
+.player-view.hidden {
+    display: none;
+}
+
+/* ── Browse search bar ────────────────────────────────────── */
+
+.browse-search-bar {
+    padding-bottom: 20px;
+}
+
+.browse-search-container {
+    position: relative;
+    max-width: 380px;
+}
+
+.browse-search-icon {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+    transition: color 0.2s;
+}
+
+.browse-search-container:focus-within .browse-search-icon {
+    color: var(--accent);
+}
+
+#browseSearch {
+    width: 100%;
+    padding: 10px 16px 10px 44px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#browseSearch:focus {
+    border-color: var(--accent-dim);
+}
+
+#browseSearch::placeholder {
+    color: var(--text-muted);
+}
+
+/* ── Browse sections / rows ───────────────────────────────── */
+
+.browse-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    padding-bottom: 12px;
+}
+
+.browse-section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.browse-section-title {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.browse-section-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Horizontal scroll row */
+.browse-cards {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+}
+
+.browse-cards::-webkit-scrollbar { height: 3px; }
+.browse-cards::-webkit-scrollbar-track { background: transparent; }
+.browse-cards::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: var(--r-pill);
+}
+
+/* Search results: wrapping grid */
+.browse-search-results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+}
+
+/* ── Poster card ──────────────────────────────────────────── */
+
+.poster-card {
+    position: relative;
+    width: 155px;
+    flex-shrink: 0;
+    cursor: pointer;
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: var(--surface-2);
+    scroll-snap-align: start;
+    /* z-index trick: instant on hover-in, delayed on hover-out */
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.25s ease,
+                z-index 0s 0.25s;
+    z-index: 0;
+}
+
+.poster-card:hover {
+    transform: scale(1.05);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8),
+                0 0 0 1px var(--accent-border);
+    z-index: 10;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.25s ease,
+                z-index 0s;
+}
+
+.poster-card-media {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    overflow: hidden;
+    background: var(--surface-2);
+}
+
+.poster-card-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+    transition: opacity 0.4s ease;
+}
+
+/* Play button — center, visible on hover */
+.poster-card-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.7);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1.5px solid rgba(200, 255, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    color: var(--accent);
+    pointer-events: none;
+}
+
+.poster-card:hover .poster-card-play {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+/* Gradient info overlay (bottom) */
+.poster-card-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 32px 10px 10px;
+    background: linear-gradient(
+        to top,
+        rgba(0, 0, 0, 0.93) 0%,
+        rgba(0, 0, 0, 0.55) 55%,
+        transparent 100%
+    );
+}
+
+.poster-card-title {
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+    margin-bottom: 3px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.poster-card-details {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.poster-card:hover .poster-card-details {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.card-rating {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.card-detail-dot {
+    opacity: 0.4;
+}
+
+/* Loading placeholder */
+.browse-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 0;
+}
+
+.browse-loading-text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+/* ── Back button ──────────────────────────────────────────── */
+
+.back-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px 7px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    margin-bottom: 14px;
+    transition: border-color 0.2s, color 0.2s;
+    width: fit-content;
+    text-transform: uppercase;
+}
+
+.back-btn:hover {
+    border-color: var(--accent-border);
+    color: var(--accent);
+}
+
+/* ── Responsive (browse) ──────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .browse-search-container {
+        max-width: 100%;
+    }
+
+    .poster-card {
+        width: 120px;
+    }
+
+    .browse-section-title {
+        font-size: 15px;
+    }
+
+    .browse-search-results {
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    }
+}
+
+@media (max-width: 480px) {
+    .poster-card {
+        width: 100px;
+    }
+
+    .browse-cards {
+        gap: 5px;
+    }
+
+    .browse-search-results {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 5px;
+    }
+
+    .browse-sections {
+        gap: 22px;
+    }
+
+    .browse-section-title {
+        font-size: 14px;
+    }
+
+    .poster-card-title {
+        font-size: 10px;
+    }
+}

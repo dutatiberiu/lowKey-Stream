@@ -24,85 +24,128 @@
             </div>
         </header>
 
-        <!-- MAIN CONTENT -->
-        <div class="main-content">
-
-            <!-- LEFT: VIDEO PLAYER -->
-            <main class="player-section">
-                <div class="video-container" id="videoContainer">
-                    <video id="videoPlayer" controls preload="metadata" crossorigin="anonymous" controlslist="nodownload noplaybackrate" disablepictureinpicture>
-                        Your browser does not support the video element.
-                    </video>
-                    <div class="video-overlay" id="videoOverlay">
-                        <svg class="big-play-icon" width="72" height="72" viewBox="0 0 24 24" fill="rgba(200, 255, 0, 0.55)" stroke="none">
-                            <polygon points="5 3 19 12 5 21 5 3"/>
-                        </svg>
-                        <div class="overlay-text">Select a video to play</div>
-                    </div>
-                </div>
-
-                <!-- FORMAT WARNING BANNER (contextual, inside player) -->
-                <div class="format-warning-banner" id="formatWarning">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                        <line x1="12" y1="9" x2="12" y2="13"/>
-                        <line x1="12" y1="17" x2="12.01" y2="17"/>
-                    </svg>
-                    <span id="formatWarningText">This format may not play in your browser.</span>
-                    <button class="warning-close" onclick="hideFormatWarning()">&times;</button>
-                </div>
-
-                <!-- RESUME BANNER (contextual, inside player) -->
-                <div class="resume-banner" id="resumeBanner">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                    <span id="resumeText">Continuă din 0:00?</span>
-                    <div class="resume-actions">
-                        <button class="resume-btn resume-btn-primary" onclick="resumePlayback()">Continuă</button>
-                        <button class="resume-btn" onclick="startFromBeginning()">De la început</button>
-                    </div>
-                </div>
-
-                <!-- NOW PLAYING INFO -->
-                <div class="now-playing" id="nowPlaying">
-                    <div class="now-playing-title" id="nowPlayingTitle">No video selected</div>
-                    <div class="now-playing-meta" id="nowPlayingMeta"></div>
-                    <div class="audio-track-selector" id="audioTrackSelector" style="display:none;"></div>
-                </div>
-
-                <!-- MOVIE INFO (TMDB) -->
-                <div class="movie-info" id="movieInfo" style="display:none;"></div>
-            </main>
-
-            <!-- RIGHT: VIDEO LIST SIDEBAR -->
-            <aside class="sidebar">
-                <!-- SEARCH -->
-                <div class="search-container">
-                    <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <!-- ════════════════════════════════════════
+             BROWSE VIEW  (default)
+             ════════════════════════════════════════ -->
+        <div id="browseView" class="browse-view">
+            <div class="browse-search-bar">
+                <div class="browse-search-container">
+                    <svg class="browse-search-icon" width="17" height="17" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="11" cy="11" r="8"/>
                         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
-                    <input type="text" id="searchInput" placeholder="Search videos..." autocomplete="off">
+                    <input type="text" id="browseSearch" placeholder="Search library…" autocomplete="off">
                 </div>
+            </div>
 
-                <!-- VIDEO COUNT / BREADCRUMB -->
-                <div class="video-count" id="videoCount">0 videos</div>
+            <div id="browseSections" class="browse-sections">
+                <div class="browse-loading">
+                    <span class="browse-loading-text">Loading library…</span>
+                </div>
+            </div>
+        </div>
 
-                <!-- VIDEO LIST -->
-                <div class="video-items" id="videoItems">
-                    <div class="empty-state">
-                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.25">
-                            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
-                            <line x1="7" y1="2" x2="7" y2="22"/>
-                            <line x1="17" y1="2" x2="17" y2="22"/>
-                            <line x1="2" y1="12" x2="22" y2="12"/>
-                        </svg>
-                        <p>Loading videos...</p>
+        <!-- ════════════════════════════════════════
+             PLAYER VIEW  (shown on card click)
+             ════════════════════════════════════════ -->
+        <div id="playerView" class="player-view hidden">
+
+            <!-- Back to browse -->
+            <button class="back-btn" onclick="showBrowseView()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2.5">
+                    <polyline points="15 18 9 12 15 6"/>
+                </svg>
+                Browse
+            </button>
+
+            <div class="main-content">
+
+                <!-- LEFT: VIDEO PLAYER -->
+                <main class="player-section">
+                    <div class="video-container" id="videoContainer">
+                        <video id="videoPlayer" controls preload="metadata"
+                               crossorigin="anonymous"
+                               controlslist="nodownload noplaybackrate"
+                               disablepictureinpicture>
+                        </video>
+                        <div class="video-overlay" id="videoOverlay">
+                            <svg class="big-play-icon" width="72" height="72"
+                                 viewBox="0 0 24 24" fill="rgba(200,255,0,0.55)" stroke="none">
+                                <polygon points="5 3 19 12 5 21 5 3"/>
+                            </svg>
+                            <div class="overlay-text">Select a video to play</div>
+                        </div>
                     </div>
-                </div>
-            </aside>
 
+                    <!-- Contextual banners -->
+                    <div class="format-warning-banner" id="formatWarning">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        <span id="formatWarningText">This format may not play.</span>
+                        <button class="warning-close" onclick="hideFormatWarning()">&times;</button>
+                    </div>
+
+                    <div class="resume-banner" id="resumeBanner">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2"
+                             stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        <span id="resumeText">Continuă din 0:00?</span>
+                        <div class="resume-actions">
+                            <button class="resume-btn resume-btn-primary" onclick="resumePlayback()">Continuă</button>
+                            <button class="resume-btn" onclick="startFromBeginning()">De la început</button>
+                        </div>
+                    </div>
+
+                    <!-- Now playing info -->
+                    <div class="now-playing" id="nowPlaying">
+                        <div class="now-playing-title" id="nowPlayingTitle">No video selected</div>
+                        <div class="now-playing-meta" id="nowPlayingMeta"></div>
+                        <div class="audio-track-selector" id="audioTrackSelector" style="display:none;"></div>
+                    </div>
+
+                    <!-- TMDB metadata -->
+                    <div class="movie-info" id="movieInfo" style="display:none;"></div>
+                </main>
+
+                <!-- RIGHT: SIDEBAR -->
+                <aside class="sidebar">
+                    <div class="search-container">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24"
+                             fill="none" stroke="currentColor" stroke-width="2"
+                             stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"/>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                        <input type="text" id="searchInput" placeholder="Search videos…" autocomplete="off">
+                    </div>
+
+                    <div class="video-count" id="videoCount">0 videos</div>
+
+                    <div class="video-items" id="videoItems">
+                        <div class="empty-state">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="1" opacity="0.25">
+                                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                                <line x1="7" y1="2" x2="7" y2="22"/>
+                                <line x1="17" y1="2" x2="17" y2="22"/>
+                                <line x1="2" y1="12" x2="22" y2="12"/>
+                            </svg>
+                            <p>Loading videos…</p>
+                        </div>
+                    </div>
+                </aside>
+
+            </div>
         </div>
 
         <footer class="footer">
@@ -110,7 +153,6 @@
         </footer>
 
     </div>
-
     <script src="app.js"></script>
 </body>
 </html>
