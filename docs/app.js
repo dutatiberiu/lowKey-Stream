@@ -13,10 +13,32 @@ const state = {
     pendingSeek: null,
     progressInterval: null,
     view: 'browse',         // 'browse' | 'player'
-    metaCache: {},          // path → metadata object (null = requested, no result)
+    metaCache: new Map(),   // path → metadata object (null = in-flight)
     browseSections: [],     // [{ title, videos, drillPath }]  — for file cards
     browseFolderCards: [],  // [{ name, node, drillPath, firstFilePath }] — for folder cards
 };
+
+// LRU cache helpers (Map preserves insertion order → easy LRU via keys().next())
+const CACHE_MAX_SIZE = 500;
+
+function cacheGet(path) {
+    return state.metaCache.get(path);
+}
+
+function cacheSet(path, value) {
+    if (state.metaCache.size >= CACHE_MAX_SIZE) {
+        state.metaCache.delete(state.metaCache.keys().next().value);
+    }
+    state.metaCache.set(path, value);
+}
+
+function cacheHas(path) {
+    return state.metaCache.has(path);
+}
+
+// Card DOM index maps for O(1) metadata update
+const cardIndex       = new Map(); // video.path        → .poster-card element
+const folderCardIndex = new Map(); // firstFilePath     → folder .poster-card element
 
 // ── DOM references ─────────────────────────────────────────
 
@@ -55,10 +77,76 @@ const LANG_NAMES = {
 };
 
 // ============================================================
+// Utilities
+// ============================================================
+
+function debounce(fn, delay) {
+    let timer;
+    return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delay);
+    };
+}
+
+function formatDuration(seconds) {
+    if (!seconds || seconds < 1) return '';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatTime(seconds) {
+    const h  = Math.floor(seconds / 3600);
+    const m  = Math.floor((seconds % 3600) / 60);
+    const s  = Math.floor(seconds % 60);
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function escHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function escAttr(str) {
+    return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Focus trap for keyboard accessibility in modal-like elements
+let _focusTrapCleanup = null;
+
+function trapFocus(el) {
+    releaseFocus();
+    const focusable = el.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    const first = focusable[0];
+    const last  = focusable[focusable.length - 1];
+    function handler(e) {
+        if (e.key !== 'Tab') return;
+        if (e.shiftKey) {
+            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+            if (document.activeElement === last)  { e.preventDefault(); first.focus(); }
+        }
+    }
+    el.addEventListener('keydown', handler);
+    first?.focus();
+    _focusTrapCleanup = () => el.removeEventListener('keydown', handler);
+}
+
+function releaseFocus() {
+    if (_focusTrapCleanup) { _focusTrapCleanup(); _focusTrapCleanup = null; }
+}
+
+// ============================================================
 // Initialization
 // ============================================================
 
 async function init() {
+    updateStatus('connecting');
     try {
         const response = await fetch('config.json');
         const config = await response.json();
@@ -164,11 +252,13 @@ function getAllFiles(node) {
 
 function getFolderIcon(name) {
     const n = name.toLowerCase();
-    if (n.includes('film') || n.includes('movie')) return '🎬';
-    if (n.includes('doc')) return '🎥';
-    if (/^s\d+$/i.test(n)) return '🗂';
-    if (n.includes('serial') || n.includes('series')) return '📺';
-    return '📁';
+    let emoji = '📁';
+    let label = 'folder';
+    if (n.includes('film') || n.includes('movie'))    { emoji = '🎬'; label = 'movies'; }
+    else if (n.includes('doc'))                        { emoji = '🎥'; label = 'documentaries'; }
+    else if (/^s\d+$/i.test(n))                        { emoji = '🗂';  label = 'season'; }
+    else if (n.includes('serial') || n.includes('series')) { emoji = '📺'; label = 'series'; }
+    return `<span aria-hidden="true">${emoji}</span><span class="sr-only">${label}</span>`;
 }
 
 // ============================================================
@@ -179,7 +269,6 @@ function showBrowseView() {
     state.view = 'browse';
     browseView.classList.remove('hidden');
     playerView.classList.add('hidden');
-    // Refresh browse in case new videos arrived
     if (state.videos.length) renderBrowse();
 }
 
@@ -251,7 +340,7 @@ function renderBrowseSections() {
     if (fragments.length === 0) {
         browseSectionsEl.innerHTML = `
             <div class="empty-state">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2" aria-hidden="true">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
                 <p>No videos found</p>
@@ -260,6 +349,20 @@ function renderBrowseSections() {
     }
 
     browseSectionsEl.innerHTML = fragments.join('');
+
+    // Build O(1) card index maps after DOM is set
+    cardIndex.clear();
+    folderCardIndex.clear();
+    for (const card of browseSectionsEl.querySelectorAll('.poster-card')) {
+        if (card.dataset.path) {
+            cardIndex.set(card.dataset.path, card);
+        }
+        if (card.dataset.folderIdx !== undefined) {
+            const fc = state.browseFolderCards[Number(card.dataset.folderIdx)];
+            if (fc) folderCardIndex.set(fc.firstFilePath, card);
+        }
+    }
+
     loadAllMeta();
 }
 
@@ -289,7 +392,7 @@ function buildFolderSectionHtml(title, node, sectionDrillPath) {
         const firstFile = files[0];
         const encodedPath = firstFile.path.split('/').map(encodeURIComponent).join('/');
         const thumbUrl    = `${state.tunnelUrl}/thumb/${encodedPath}`;
-        const meta        = state.metaCache[firstFile.path];
+        const meta        = cacheGet(firstFile.path);
         const imgSrc      = meta?.poster_file
             ? `${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}`
             : thumbUrl;
@@ -309,18 +412,18 @@ function buildFolderSectionHtml(title, node, sectionDrillPath) {
         });
 
         return `
-            <div class="poster-card" data-folder-idx="${fcIdx}"
-                 onclick="selectFolderFromBrowse(${fcIdx})">
+            <div class="poster-card loading" data-folder-idx="${fcIdx}"
+                 data-action="select-folder">
                 <div class="poster-card-media">
                     <img class="poster-card-img"
                          src="${imgSrc}"
                          loading="lazy"
-                         onerror="this.src='${thumbUrl}'; this.onerror=null"
+                         onerror="this.onerror=null;this.closest('.poster-card').classList.add('no-thumb')"
                          alt="">
                 </div>
-                <div class="poster-card-play">
+                <div class="poster-card-play" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2.5">
+                         stroke="currentColor" stroke-width="2.5" aria-hidden="true">
                         <polyline points="9 18 15 12 9 6"/>
                     </svg>
                 </div>
@@ -356,42 +459,10 @@ function selectFolderFromBrowse(fcIdx) {
     videoOverlay.classList.remove('hidden');
 }
 
-function renderBrowseSearch(query) {
-    const filtered = state.videos.filter(v =>
-        v.name.toLowerCase().includes(query) ||
-        v.filename.toLowerCase().includes(query)
-    );
-
-    state.browseSections = [{ title: 'Results', videos: filtered, drillPath: [] }];
-
-    if (filtered.length === 0) {
-        browseSectionsEl.innerHTML = `
-            <div class="empty-state">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
-                    <circle cx="11" cy="11" r="8"/>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                </svg>
-                <p>No results for "${escHtml(query)}"</p>
-            </div>`;
-        return;
-    }
-
-    const cards = filtered.map((v, i) => buildPosterCardHtml(v, 0, i)).join('');
-    browseSectionsEl.innerHTML = `
-        <div class="browse-section">
-            <div class="browse-section-header">
-                <span class="browse-section-title">Results</span>
-                <span class="browse-section-count">${filtered.length}</span>
-            </div>
-            <div class="browse-search-results">${cards}</div>
-        </div>`;
-    loadAllMeta();
-}
-
 function buildPosterCardHtml(video, sectionIdx, vidIdx) {
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
     const thumbUrl = `${state.tunnelUrl}/thumb/${encodedPath}`;
-    const meta = state.metaCache[video.path];
+    const meta = cacheGet(video.path);
 
     const imgSrc = meta?.poster_file
         ? `${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}`
@@ -405,18 +476,20 @@ function buildPosterCardHtml(video, sectionIdx, vidIdx) {
                         .join('<span class="card-detail-dot">·</span>');
 
     return `
-        <div class="poster-card"
+        <div class="poster-card loading"
              data-path="${escAttr(video.path)}"
-             onclick="selectFromBrowse(${sectionIdx}, ${vidIdx})">
+             data-action="select-video"
+             data-section-idx="${sectionIdx}"
+             data-vid-idx="${vidIdx}">
             <div class="poster-card-media">
                 <img class="poster-card-img"
                      src="${imgSrc}"
                      loading="lazy"
-                     onerror="this.src='${thumbUrl}'; this.onerror=null"
+                     onerror="this.onerror=null;this.closest('.poster-card').classList.add('no-thumb')"
                      alt="">
             </div>
-            <div class="poster-card-play">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <div class="poster-card-play" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
                     <polygon points="6 3 20 12 6 21 6 3"/>
                 </svg>
             </div>
@@ -433,10 +506,7 @@ async function selectFromBrowse(sectionIdx, vidIdx) {
     const section = state.browseSections[sectionIdx];
     if (!section) return;
 
-    // Set drill path so the player sidebar navigates to the right folder
     state.drillPath = [...(section.drillPath || [])];
-
-    // filteredVideos = section's flat list (enables prev/next across the row)
     state.filteredVideos = section.videos;
 
     showPlayerView();
@@ -446,63 +516,67 @@ async function selectFromBrowse(sectionIdx, vidIdx) {
 // ── Metadata lazy-loading ──────────────────────────────────
 
 async function loadAllMeta() {
-    const toLoad = state.videos.filter(v => state.metaCache[v.path] === undefined);
+    const toLoad = state.videos.filter(v => !cacheHas(v.path));
     const BATCH = 8;
     for (let i = 0; i < toLoad.length; i += BATCH) {
         await Promise.all(toLoad.slice(i, i + BATCH).map(loadMeta));
     }
+    // Mark any cards that got no metadata as loaded (remove shimmer)
+    for (const card of browseSectionsEl.querySelectorAll('.poster-card.loading')) {
+        card.classList.remove('loading');
+        card.classList.add('loaded');
+    }
 }
 
 async function loadMeta(video) {
-    if (state.metaCache[video.path] !== undefined) return;
-    state.metaCache[video.path] = null; // mark in-flight
+    if (cacheHas(video.path)) return;
+    cacheSet(video.path, null); // mark in-flight
 
     try {
         const encoded = video.path.split('/').map(encodeURIComponent).join('/');
         const resp = await fetch(`${state.tunnelUrl}/api/metadata/${encoded}`);
         const meta = await resp.json();
         if (meta?.title) {
-            state.metaCache[video.path] = meta;
+            cacheSet(video.path, meta);
             updateCardWithMeta(video.path, meta);
         }
     } catch { /* no poster, stay as thumbnail */ }
 }
 
 function updateCardWithMeta(videoPath, meta) {
-    for (const card of document.querySelectorAll('.poster-card')) {
-
-        // ── Poster card (data-path matches) ───────────────────
-        if (card.dataset.path === videoPath) {
-            if (meta.poster_file) {
-                const img = card.querySelector('.poster-card-img');
-                if (img) img.src = `${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}`;
-            }
-            if (meta.title) {
-                const t = card.querySelector('.poster-card-title');
-                if (t) t.textContent = meta.title;
-            }
-            const overlay = card.querySelector('.poster-card-overlay');
-            if (overlay && meta.poster_file) {
-                const rating = meta.rating ? `<span class="card-rating">★ ${meta.rating.toFixed(1)}</span>` : '';
-                const year   = meta.year   ? `<span>${meta.year}</span>` : '';
-                const dotted = [rating, year].filter(Boolean).join('<span class="card-detail-dot">·</span>');
-                if (dotted) {
-                    let det = overlay.querySelector('.poster-card-details');
-                    if (!det) { det = document.createElement('div'); det.className = 'poster-card-details'; overlay.appendChild(det); }
-                    det.innerHTML = dotted;
-                }
-            }
-            // don't break — same file may also be a folder card's first file
+    // Poster card — O(1) lookup
+    const card = cardIndex.get(videoPath);
+    if (card) {
+        if (meta.poster_file) {
+            const img = card.querySelector('.poster-card-img');
+            if (img) img.src = `${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}`;
         }
-
-        // ── Folder card whose representative thumbnail is this file ──
-        if (card.dataset.folderIdx !== undefined && meta.poster_file) {
-            const fc = state.browseFolderCards[Number(card.dataset.folderIdx)];
-            if (fc && fc.firstFilePath === videoPath) {
-                const img = card.querySelector('.poster-card-img');
-                if (img) img.src = `${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}`;
+        if (meta.title) {
+            const t = card.querySelector('.poster-card-title');
+            if (t) t.textContent = meta.title;
+        }
+        const overlay = card.querySelector('.poster-card-overlay');
+        if (overlay && meta.poster_file) {
+            const rating = meta.rating ? `<span class="card-rating">★ ${meta.rating.toFixed(1)}</span>` : '';
+            const year   = meta.year   ? `<span>${meta.year}</span>` : '';
+            const dotted = [rating, year].filter(Boolean).join('<span class="card-detail-dot">·</span>');
+            if (dotted) {
+                let det = overlay.querySelector('.poster-card-details');
+                if (!det) { det = document.createElement('div'); det.className = 'poster-card-details'; overlay.appendChild(det); }
+                det.innerHTML = dotted;
             }
         }
+        card.classList.remove('loading');
+        card.classList.add('loaded');
+    }
+
+    // Folder card whose representative thumbnail is this file — O(1) lookup
+    const fcard = folderCardIndex.get(videoPath);
+    if (fcard && meta.poster_file) {
+        const img = fcard.querySelector('.poster-card-img');
+        if (img) img.src = `${state.tunnelUrl}/poster/${encodeURIComponent(meta.poster_file)}`;
+        fcard.classList.remove('loading');
+        fcard.classList.add('loaded');
     }
 }
 
@@ -556,8 +630,8 @@ function renderDrill() {
             ? state.drillPath[state.drillPath.length - 2]
             : 'Colecție';
         html += `
-            <div class="drill-back-btn" onclick="drillBack()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <div class="drill-back-btn" data-action="drill-back">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
                     <polyline points="15 18 9 12 15 6"/>
                 </svg>
                 ${escHtml(backLabel)}
@@ -568,7 +642,7 @@ function renderDrill() {
     if (subfolderNames.length === 0 && files.length === 0) {
         html += `
             <div class="empty-state">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.25">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.25" aria-hidden="true">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
                 <p>Folder gol</p>
@@ -581,15 +655,14 @@ function renderDrill() {
         const sub = node._subfolders[name];
         const total = countVideos(sub);
         const icon = getFolderIcon(name);
-        const safe = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         html += `
-            <div class="folder-item" onclick="drillInto('${safe}')">
+            <div class="folder-item" data-action="drill-into" data-folder-name="${escAttr(name)}">
                 <div class="folder-icon">${icon}</div>
                 <div class="folder-info">
                     <div class="folder-name">${escHtml(name)}</div>
                     <div class="folder-meta">${total} videoclip${total !== 1 ? 'uri' : ''}</div>
                 </div>
-                <svg class="folder-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg class="folder-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
                     <polyline points="9 18 15 12 9 6"/>
                 </svg>
             </div>`;
@@ -603,15 +676,16 @@ function renderDrill() {
 }
 
 function renderFlatList(videos) {
+    const query = searchInput.value.trim();
     if (videos.length === 0) {
-        videoItems.innerHTML = `
-            <div class="empty-state">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.25">
-                    <circle cx="11" cy="11" r="8"/>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                </svg>
-                <p>No videos found</p>
-            </div>`;
+        videoItems.innerHTML = query
+            ? `<div class="empty-search">Nothing found for "<em>${escHtml(query)}</em>"</div>`
+            : `<div class="empty-state">
+                   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.25" aria-hidden="true">
+                       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                   </svg>
+                   <p>No videos found</p>
+               </div>`;
         return;
     }
     videoItems.innerHTML = videos.map((v, i) => renderVideoItem(v, i)).join('');
@@ -629,15 +703,15 @@ function renderVideoItem(video, index) {
         ? `<span class="meta-duration">${formatDuration(video.duration_seconds)}</span>`
         : '';
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
-    const thumbHtml   = `<img class="video-thumb" src="${state.tunnelUrl}/thumb/${encodedPath}" loading="lazy" onerror="this.style.display='none'" alt="">`;
+    const thumbHtml   = `<img class="video-thumb" src="${state.tunnelUrl}/thumb/${encodedPath}" loading="lazy" onerror="this.onerror=null;this.closest('.video-item-icon').classList.add('no-thumb')" alt="">`;
 
     return `
         <div class="video-item ${isActive ? 'active' : ''} ${playable}"
-             onclick="playVideo(${index})" data-index="${index}">
+             data-action="play-video" data-index="${index}">
             <div class="video-item-icon">
                 ${thumbHtml}
                 <svg class="video-icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polygon points="5 3 19 12 5 21 5 3"/>
                 </svg>
                 ${warnBadge}
@@ -665,10 +739,8 @@ async function playVideo(index) {
     if (!video.playable) showFormatWarning(video.extension);
     else hideFormatWarning();
 
-    if (state.progressInterval) {
-        clearInterval(state.progressInterval);
-        state.progressInterval = null;
-    }
+    clearInterval(state.progressInterval);
+    state.progressInterval = null;
     hideResumeBanner();
     if (movieInfo) movieInfo.style.display = 'none';
 
@@ -691,11 +763,14 @@ async function playVideo(index) {
             if (i === 0) track.default = true;
             videoPlayer.appendChild(track);
         });
-        videoPlayer.addEventListener('loadedmetadata', function disableSubs() {
-            for (let i = 0; i < videoPlayer.textTracks.length; i++) {
-                videoPlayer.textTracks[i].mode = 'disabled';
+        videoPlayer.addEventListener('loadedmetadata', function applySubs() {
+            const enabled = localStorage.getItem('lowkey_subtitle_enabled') === 'true';
+            if (!enabled) {
+                for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+                    videoPlayer.textTracks[i].mode = 'disabled';
+                }
             }
-            videoPlayer.removeEventListener('loadedmetadata', disableSubs);
+            videoPlayer.removeEventListener('loadedmetadata', applySubs);
         });
     }
 
@@ -710,7 +785,11 @@ async function playVideo(index) {
         videoPlayer.play().catch(console.error);
     }
 
-    state.progressInterval = setInterval(() => saveProgress(video.path), 10000);
+    // Guard against stale async resolution (user switched video during await)
+    if (state.currentVideo?.path === video.path) {
+        clearInterval(state.progressInterval);
+        state.progressInterval = setInterval(() => saveProgress(video.path), 10000);
+    }
 
     videoOverlay.classList.add('hidden');
     nowPlayingTitle.textContent = video.name;
@@ -772,19 +851,19 @@ function showResumeBanner(position) {
     state.pendingSeek = position;
     resumeText.textContent = `Continuă din ${formatTime(position)}?`;
     resumeBanner.classList.add('visible');
+    trapFocus(resumeBanner);
 }
 
 function hideResumeBanner() {
     resumeBanner.classList.remove('visible');
     state.pendingSeek = null;
+    releaseFocus();
 }
 
 function resumePlayback() {
+    const seek = state.pendingSeek;
     hideResumeBanner();
-    if (state.pendingSeek !== null) {
-        videoPlayer.currentTime = state.pendingSeek;
-        state.pendingSeek = null;
-    }
+    if (seek !== null) videoPlayer.currentTime = seek;
     videoPlayer.play().catch(() => {});
 }
 
@@ -802,8 +881,7 @@ async function loadMovieMetadata(video) {
     if (!movieInfo || !state.tunnelUrl) return;
     movieInfo.style.display = 'none';
 
-    // Use cache if already loaded
-    const cached = state.metaCache[video.path];
+    const cached = cacheGet(video.path);
     if (cached) { renderMovieInfo(cached); return; }
 
     try {
@@ -811,7 +889,7 @@ async function loadMovieMetadata(video) {
         const resp = await fetch(`${state.tunnelUrl}/api/metadata/${encoded}`);
         const meta = await resp.json();
         if (meta?.title) {
-            state.metaCache[video.path] = meta;
+            cacheSet(video.path, meta);
             renderMovieInfo(meta);
         }
     } catch { /* no metadata */ }
@@ -893,39 +971,13 @@ function hideFormatWarning() {
 
 function updateStatus(status, message) {
     statusDot.className = 'status-dot ' + status;
-    statusText.textContent = status === 'online' ? 'Connected' : (message || 'Server offline');
-}
-
-// ============================================================
-// Utility
-// ============================================================
-
-function formatDuration(seconds) {
-    if (!seconds || seconds < 1) return '';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-function formatTime(seconds) {
-    const h  = Math.floor(seconds / 3600);
-    const m  = Math.floor((seconds % 3600) / 60);
-    const s  = Math.floor(seconds % 60);
-    const mm = String(m).padStart(2, '0');
-    const ss = String(s).padStart(2, '0');
-    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
-
-function escHtml(str) {
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
-function escAttr(str) {
-    return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    if (status === 'online') {
+        statusText.textContent = 'Connected';
+    } else if (status === 'connecting') {
+        statusText.textContent = 'Connecting...';
+    } else {
+        statusText.textContent = message || 'Server offline';
+    }
 }
 
 // ============================================================
@@ -975,7 +1027,8 @@ document.addEventListener('keydown', (e) => {
 // ============================================================
 
 videoPlayer.addEventListener('ended', () => {
-    if (state.progressInterval) { clearInterval(state.progressInterval); state.progressInterval = null; }
+    clearInterval(state.progressInterval);
+    state.progressInterval = null;
     playNext();
 });
 
@@ -996,11 +1049,42 @@ videoOverlay.addEventListener('click', () => {
     if (state.filteredVideos.length > 0) playVideo(0);
 });
 
+// Save subtitle preference whenever the user toggles a subtitle track
+videoPlayer.textTracks.addEventListener('change', () => {
+    const anyEnabled = Array.from(videoPlayer.textTracks).some(t => t.mode === 'showing');
+    localStorage.setItem('lowkey_subtitle_enabled', String(anyEnabled));
+});
+
 // ============================================================
-// Event listeners
+// Delegated event listeners (replaces inline onclick attributes)
 // ============================================================
 
-searchInput.addEventListener('input', () => renderDrill());
+// Browse sections → poster cards and folder cards
+browseSectionsEl.addEventListener('click', e => {
+    const target = e.target.closest('[data-action]');
+    if (!target) return;
+    switch (target.dataset.action) {
+        case 'select-folder': selectFolderFromBrowse(Number(target.dataset.folderIdx)); break;
+        case 'select-video':  selectFromBrowse(Number(target.dataset.sectionIdx), Number(target.dataset.vidIdx)); break;
+    }
+});
+
+// Video items sidebar → video playback and folder drill
+videoItems.addEventListener('click', e => {
+    const target = e.target.closest('[data-action]');
+    if (!target) return;
+    switch (target.dataset.action) {
+        case 'play-video':  playVideo(Number(target.dataset.index)); break;
+        case 'drill-back':  drillBack(); break;
+        case 'drill-into':  drillInto(target.dataset.folderName); break;
+    }
+});
+
+// ============================================================
+// Persistent event listeners
+// ============================================================
+
+searchInput.addEventListener('input', debounce(() => renderDrill(), 200));
 
 // Periodic health check + refresh (every 2 minutes)
 setInterval(async () => {
