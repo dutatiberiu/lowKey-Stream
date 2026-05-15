@@ -1479,6 +1479,43 @@ body {
    FEATURE ADDITIONS
    =================================================== */
 
+/* ── Poster card: remove button (Continue Watching) ─ */
+.card-remove-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 30;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity var(--duration-fast), transform var(--duration-fast),
+                background var(--duration-fast), color var(--duration-fast);
+    pointer-events: none;
+}
+
+.poster-card:hover .card-remove-btn,
+.poster-card:focus-visible .card-remove-btn {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: auto;
+}
+
+.card-remove-btn:hover {
+    background: var(--color-error);
+    border-color: transparent;
+    color: #fff;
+    transform: scale(1.1);
+}
+
 /* ── Poster card: watch progress bar ─────────────── */
 .poster-card-progress {
     position: absolute;

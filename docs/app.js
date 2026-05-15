@@ -440,7 +440,8 @@ function renderBrowseSections() {
 
 // Section where each card = a file (movies, loose episodes)
 function buildFileSectionHtml(title, videos, sectionIdx) {
-    const cards = videos.map((v, i) => buildPosterCardHtml(v, sectionIdx, i)).join('');
+    const isContinue = title === 'Continue Watching';
+    const cards = videos.map((v, i) => buildPosterCardHtml(v, sectionIdx, i, isContinue)).join('');
     return `
         <div class="browse-section">
             <div class="browse-section-header">
@@ -534,7 +535,7 @@ function selectFolderFromBrowse(fcIdx) {
     videoOverlay.classList.remove('hidden');
 }
 
-function buildPosterCardHtml(video, sectionIdx, vidIdx) {
+function buildPosterCardHtml(video, sectionIdx, vidIdx, showRemoveBtn = false) {
     const encodedPath = video.path.split('/').map(encodeURIComponent).join('/');
     const thumbUrl = `${state.tunnelUrl}/thumb/${encodedPath}`;
     const meta = cacheGet(video.path);
@@ -568,6 +569,16 @@ function buildPosterCardHtml(video, sectionIdx, vidIdx) {
     const qualityBadge = video.quality
         ? `<span class="quality-badge">${escHtml(video.quality)}</span>`
         : '';
+    const removeBtn = showRemoveBtn
+        ? `<button class="card-remove-btn" data-action="remove-progress"
+                   data-path="${escAttr(video.path)}"
+                   aria-label="Remove from Continue Watching" title="Remove">
+               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+               </svg>
+           </button>`
+        : '';
 
     return `
         <div class="poster-card loading"
@@ -586,6 +597,7 @@ function buildPosterCardHtml(video, sectionIdx, vidIdx) {
                      alt="">
                 ${qualityBadge}
                 ${watchedBadge}
+                ${removeBtn}
             </div>
             <div class="poster-card-play" aria-hidden="true">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
@@ -1338,17 +1350,36 @@ videoPlayer.textTracks.addEventListener('change', () => {
 // Delegated event listeners (replaces inline onclick attributes)
 // ============================================================
 
+function removeFromWatchProgress(videoPath) {
+    state.watchProgress.delete(videoPath);
+    try {
+        const raw = localStorage.getItem('lowkey_watch_progress');
+        if (raw) {
+            const stored = JSON.parse(raw);
+            delete stored[videoPath];
+            localStorage.setItem('lowkey_watch_progress', JSON.stringify(stored));
+        }
+    } catch { /* ignore */ }
+    renderBrowse();
+}
+
 // Browse sections → poster cards and folder cards (click + keyboard)
 function handleBrowseAction(target) {
     if (!target) return;
     switch (target.dataset.action) {
+        case 'remove-progress':
+            removeFromWatchProgress(target.dataset.path);
+            break;
         case 'select-folder': selectFolderFromBrowse(Number(target.dataset.folderIdx)); break;
         case 'select-video':  selectFromBrowse(Number(target.dataset.sectionIdx), Number(target.dataset.vidIdx)); break;
     }
 }
 
 browseSectionsEl.addEventListener('click', e => {
-    handleBrowseAction(e.target.closest('[data-action]'));
+    const target = e.target.closest('[data-action]');
+    // If the remove button was clicked, don't let the event bubble to the card
+    if (target?.dataset.action === 'remove-progress') e.stopPropagation();
+    handleBrowseAction(target);
 });
 
 browseSectionsEl.addEventListener('keydown', e => {
