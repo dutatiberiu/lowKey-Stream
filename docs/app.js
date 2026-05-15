@@ -167,7 +167,7 @@ async function init() {
 
         const online = await checkServerHealth();
         if (online) {
-            await loadAllProgress();
+            loadAllProgress();
             await refreshVideoList();
         } else {
             renderOfflineState();
@@ -224,16 +224,18 @@ async function refreshVideoList() {
     }
 }
 
-async function loadAllProgress() {
-    if (!state.tunnelUrl) return;
+function loadAllProgress() {
+    // Read from localStorage — progress is per-browser so "Continue Watching"
+    // is private to each device and not shared with other users on the same tunnel.
+    state.watchProgress.clear();
     try {
-        const resp = await fetch(`${state.tunnelUrl}/api/progress/all`);
-        const data = await resp.json();
-        state.watchProgress.clear();
+        const raw = localStorage.getItem('lowkey_watch_progress');
+        if (!raw) return;
+        const data = JSON.parse(raw);
         for (const [path, entry] of Object.entries(data)) {
             state.watchProgress.set(path, entry);
         }
-    } catch { /* progress non-critical */ }
+    } catch { /* non-critical */ }
 }
 
 function renderOfflineState(reason) {
@@ -938,12 +940,19 @@ async function saveProgress(videoPath) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: videoPath, position, duration }),
         });
-        // Keep local watchProgress in sync so the progress bar updates on next browse render
-        state.watchProgress.set(videoPath, {
+        // Mirror to localStorage — this is the source of truth for "Continue Watching"
+        const entry = {
             position,
             updated_at: new Date().toISOString(),
             completed: duration > 0 && (position / duration) > 0.95,
-        });
+        };
+        state.watchProgress.set(videoPath, entry);
+        try {
+            const raw = localStorage.getItem('lowkey_watch_progress');
+            const stored = raw ? JSON.parse(raw) : {};
+            stored[videoPath] = entry;
+            localStorage.setItem('lowkey_watch_progress', JSON.stringify(stored));
+        } catch { /* localStorage full or unavailable */ }
     } catch { /* ignore */ }
 }
 
