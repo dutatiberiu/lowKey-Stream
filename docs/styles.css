@@ -1692,7 +1692,11 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 4px;
+    margin-bottom: 14px;
+}
+
+.player-topbar .back-btn {
+    margin-bottom: 0;
 }
 
 .shortcuts-help-btn {
@@ -1820,14 +1824,13 @@ body {
     color: var(--accent);
 }
 
-/* Native subtitle cue styling */
+/* Native subtitle cue baseline — size overridden dynamically via JS #sub-size-style tag */
 ::cue {
-    font-size: var(--sub-size, 1.2em);
     font-family: var(--font-body);
     background: rgba(0, 0, 0, 0.78);
     color: #fff;
     line-height: 1.5;
-    border-radius: 3px;
+    font-size: 16px;
 }
 
 /* ── Browse search bar ────────────────────────────── */

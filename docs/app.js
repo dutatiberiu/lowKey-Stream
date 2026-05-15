@@ -848,10 +848,13 @@ async function playVideo(index) {
     const videoUrl = `${state.tunnelUrl}/video/${encodedPath}`;
 
     if (audioTrackSelector) audioTrackSelector.style.display = 'none';
+    const subtitleControls = document.getElementById('subtitleControls');
+    if (subtitleControls) subtitleControls.style.display = 'none';
     videoPlayer.querySelectorAll('track').forEach(t => t.remove());
     videoPlayer.src = videoUrl;
 
     if (video.subtitles?.length) {
+        if (subtitleControls) subtitleControls.style.display = 'flex';
         video.subtitles.forEach((sub, i) => {
             const track = document.createElement('track');
             track.kind    = 'subtitles';
@@ -1116,19 +1119,32 @@ videoPlayer.addEventListener('volumechange', syncVolumeUI);
 // Subtitle size control
 // ============================================================
 
+function _applySubtitleSize(px) {
+    let tag = document.getElementById('sub-size-style');
+    if (!tag) {
+        tag = document.createElement('style');
+        tag.id = 'sub-size-style';
+        document.head.appendChild(tag);
+    }
+    tag.textContent = `::cue { font-size: ${px}px !important; }`;
+}
+
 function restoreSubtitleSize() {
-    const saved = localStorage.getItem('lowkey_sub_size');
-    if (saved) document.documentElement.style.setProperty('--sub-size', saved);
+    const saved = parseInt(localStorage.getItem('lowkey_sub_px') || '0', 10);
+    if (saved > 0) _applySubtitleSize(saved);
 }
 
 function setSubtitleSize(delta) {
-    const current = parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--sub-size') || '1.2'
-    );
-    const next = Math.min(3, Math.max(0.6, current + delta));
-    const val = next.toFixed(1) + 'em';
-    document.documentElement.style.setProperty('--sub-size', val);
-    localStorage.setItem('lowkey_sub_size', val);
+    const tag = document.getElementById('sub-size-style');
+    const current = tag
+        ? parseInt(tag.textContent.match(/(\d+)px/)?.[1] || '16', 10)
+        : 16;
+    const next = Math.min(40, Math.max(10, current + delta));
+    _applySubtitleSize(next);
+    localStorage.setItem('lowkey_sub_px', String(next));
+    // Update button title to show current size
+    const label = document.querySelector('.subtitle-controls-label');
+    if (label) label.textContent = `Subs ${next}px`;
 }
 
 // ============================================================
