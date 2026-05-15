@@ -1415,8 +1415,7 @@ body {
     color: var(--accent);
 }
 
-/* ── Browse search bar (legacy — kept for dead CSS, unused) ── */
-.browse-search-bar { display: none; }
+/* ── Browse search bar (legacy placeholder — see FEATURE ADDITIONS below) ── */
 
 /* ── Responsive (browse) ──────────────────────────────────── */
 
@@ -1473,5 +1472,424 @@ body {
         animation-duration: 0.01s !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01s !important;
+    }
+}
+
+/* ===================================================
+   FEATURE ADDITIONS
+   =================================================== */
+
+/* ── Poster card: watch progress bar ─────────────── */
+.poster-card-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+    z-index: 25;
+    pointer-events: none;
+    transition: width var(--duration-base);
+    max-width: 100%;
+}
+
+/* ── Poster card: watched badge ───────────────────── */
+.watched-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 25;
+    pointer-events: none;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+
+/* ── Poster card: quality badge ───────────────────── */
+.quality-badge {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    padding: 2px 5px;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.75);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    z-index: 24;
+    pointer-events: none;
+}
+
+/* ── Poster card: focus ring (keyboard nav) ───────── */
+.poster-card:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    transform: scale(1.03);
+}
+
+/* ── Offline state ────────────────────────────────── */
+.offline-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 60px 24px;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.offline-icon {
+    color: var(--text-muted);
+    opacity: 0.5;
+}
+
+.offline-title {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.offline-msg {
+    font-size: 14px;
+    color: var(--text-secondary);
+    max-width: 400px;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.offline-url {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0;
+    word-break: break-all;
+}
+
+.offline-retry-btn {
+    margin-top: 8px;
+    padding: 9px 22px;
+    background: transparent;
+    border: 1px solid var(--accent-border);
+    border-radius: var(--r-pill);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.offline-retry-btn:hover {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+}
+
+/* ── Shortcuts modal ──────────────────────────────── */
+.shortcuts-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 900;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-base);
+}
+
+.shortcuts-modal.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.shortcuts-modal-content {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    padding: 24px;
+    min-width: 320px;
+    max-width: 480px;
+    width: 90%;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-8px);
+    transition: transform var(--duration-base);
+}
+
+.shortcuts-modal.visible .shortcuts-modal-content {
+    transform: translateY(0);
+}
+
+.shortcuts-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+}
+
+.shortcuts-modal-title {
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.shortcuts-close {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--r-sm);
+    display: flex;
+    align-items: center;
+    transition: color var(--duration-fast);
+}
+
+.shortcuts-close:hover { color: var(--accent); }
+
+.shortcuts-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.shortcuts-table tr + tr td { border-top: 1px solid var(--border); }
+
+.shortcut-key {
+    padding: 8px 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    white-space: nowrap;
+    padding-right: 20px;
+}
+
+.shortcut-desc {
+    padding: 8px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* ── Shortcuts help button (player topbar) ────────── */
+.player-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.shortcuts-help-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.shortcuts-help-btn:hover {
+    border-color: var(--accent-border);
+    color: var(--accent);
+}
+
+/* ── Volume control ───────────────────────────────── */
+.volume-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.mute-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    transition: color var(--duration-fast);
+}
+
+.mute-btn:hover { color: var(--accent); }
+
+.mute-btn .vol-off { display: none; }
+.mute-btn.muted .vol-on { display: none; }
+.mute-btn.muted .vol-off { display: block; }
+
+.volume-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 3px;
+    background: var(--surface-2);
+    border-radius: var(--r-pill);
+    outline: none;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    transition: transform var(--duration-fast);
+}
+
+.volume-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-thumb:hover { transform: scale(1.25); }
+
+.volume-display {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 34px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* ── Subtitle controls ────────────────────────────── */
+.subtitle-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.subtitle-controls-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 2px;
+}
+
+.sub-size-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.sub-size-btn:hover {
+    border-color: var(--accent-border);
+    color: var(--accent);
+}
+
+/* Native subtitle cue styling */
+::cue {
+    font-size: var(--sub-size, 1.2em);
+    font-family: var(--font-body);
+    background: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    line-height: 1.5;
+    border-radius: 3px;
+}
+
+/* ── Browse search bar ────────────────────────────── */
+.browse-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    margin-bottom: 8px;
+    transition: border-color var(--duration-fast);
+}
+
+.browse-search-bar:focus-within {
+    border-color: var(--accent-border);
+}
+
+.browse-search-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+#browseSearchInput {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 14px;
+}
+
+#browseSearchInput::placeholder {
+    color: var(--text-muted);
+}
+
+/* ── Browse search grid (wrapping for search results) */
+.browse-search-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 14px;
+    overflow: visible;
+    max-height: none;
+}
+
+/* ── Mobile: sidebar max-height fix ──────────────── */
+@media (max-width: 480px) {
+    .sidebar {
+        max-height: min(440px, 52vh);
+    }
+}
+
+/* ── Browse cards touch-scroll on iOS ─────────────── */
+.browse-cards {
+    touch-action: pan-x;
+}
+
+/* ── Responsive: fluid card width with clamp ─────── */
+@media (min-width: 481px) and (max-width: 799px) {
+    .poster-card {
+        width: clamp(110px, 22vw, 155px);
     }
 }

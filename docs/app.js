@@ -16,6 +16,8 @@ const state = {
     metaCache: new Map(),   // path → metadata object (null = in-flight)
     browseSections: [],     // [{ title, videos, drillPath }]  — for file cards
     browseFolderCards: [],  // [{ name, node, drillPath, firstFilePath }] — for folder cards
+    watchProgress: new Map(), // path → { position, updated_at, completed }
+    lastSavedPosition: 0,
 };
 
 // LRU cache helpers (Map preserves insertion order → easy LRU via keys().next())
@@ -61,6 +63,11 @@ const movieInfo          = document.getElementById('movieInfo');
 const browseView         = document.getElementById('browseView');
 const playerView         = document.getElementById('playerView');
 const browseSectionsEl   = document.getElementById('browseSections');
+const browseSearchInput  = document.getElementById('browseSearchInput');
+const volumeSlider       = document.getElementById('volumeSlider');
+const volumeDisplay      = document.getElementById('volumeDisplay');
+const muteBtn            = document.getElementById('muteBtn');
+const shortcutsModal     = document.getElementById('shortcutsModal');
 
 // ISO 639 language code → display name
 const LANG_NAMES = {
@@ -154,17 +161,25 @@ async function init() {
 
         if (!state.tunnelUrl) {
             updateStatus('offline', 'Tunnel URL not configured in config.json.');
+            renderOfflineState('Tunnel URL not configured in config.json.');
             return;
         }
 
         const online = await checkServerHealth();
         if (online) {
+            await loadAllProgress();
             await refreshVideoList();
+        } else {
+            renderOfflineState();
         }
     } catch (error) {
         console.error('Failed to load config:', error);
         updateStatus('offline', 'Could not load config. Is the site deployed?');
+        renderOfflineState('Could not load config.json.');
     }
+
+    restoreVolume();
+    restoreSubtitleSize();
 }
 
 // ============================================================
@@ -185,6 +200,7 @@ async function checkServerHealth() {
     } catch {
         state.serverOnline = false;
         updateStatus('offline', 'Server not responding. Is it running?');
+        if (state.view === 'browse') renderOfflineState();
     }
     return false;
 }
@@ -204,7 +220,42 @@ async function refreshVideoList() {
         }
     } catch (error) {
         console.error('Failed to refresh video list:', error);
+        if (state.view === 'browse') renderOfflineState();
     }
+}
+
+async function loadAllProgress() {
+    if (!state.tunnelUrl) return;
+    try {
+        const resp = await fetch(`${state.tunnelUrl}/api/progress/all`);
+        const data = await resp.json();
+        state.watchProgress.clear();
+        for (const [path, entry] of Object.entries(data)) {
+            state.watchProgress.set(path, entry);
+        }
+    } catch { /* progress non-critical */ }
+}
+
+function renderOfflineState(reason) {
+    const url = state.tunnelUrl || '(not configured)';
+    const msg = reason || 'Server not responding. Make sure it is running.';
+    browseSectionsEl.innerHTML = `
+        <div class="offline-state">
+            <svg class="offline-icon" width="48" height="48" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <line x1="1" y1="1" x2="23" y2="23"/>
+                <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/>
+                <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/>
+                <path d="M10.71 5.05A16 16 0 0 1 22.56 9"/>
+                <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+                <circle cx="12" cy="20" r="1" fill="currentColor"/>
+            </svg>
+            <h2 class="offline-title">Server Offline</h2>
+            <p class="offline-msg">${escHtml(msg)}</p>
+            <p class="offline-url">${escHtml(url)}</p>
+            <button class="offline-retry-btn" onclick="init()">Retry</button>
+        </div>`;
 }
 
 // ============================================================
@@ -311,6 +362,25 @@ function renderBrowseSections() {
     const root = state.folderTree;
     const fragments = [];
 
+    // "Continue Watching" — videos with progress > 30s and < 95% complete
+    if (state.watchProgress.size > 0) {
+        const continueVideos = state.videos.filter(v => {
+            const p = state.watchProgress.get(v.path);
+            if (!p || p.completed) return false;
+            const maxPos = v.duration_seconds ? v.duration_seconds * 0.95 : Infinity;
+            return p.position > 30 && p.position < maxPos;
+        }).sort((a, b) => {
+            const pa = state.watchProgress.get(a.path)?.updated_at || '';
+            const pb = state.watchProgress.get(b.path)?.updated_at || '';
+            return pb.localeCompare(pa);
+        });
+        if (continueVideos.length > 0) {
+            const idx = state.browseSections.length;
+            state.browseSections.push({ title: 'Continue Watching', videos: continueVideos, drillPath: [] });
+            fragments.push(buildFileSectionHtml('Continue Watching', continueVideos, idx));
+        }
+    }
+
     // Root-level files → "Library" (always shown as poster cards)
     if (root._files.length > 0) {
         const idx = state.browseSections.length;
@@ -413,7 +483,10 @@ function buildFolderSectionHtml(title, node, sectionDrillPath) {
 
         return `
             <div class="poster-card loading" data-folder-idx="${fcIdx}"
-                 data-action="select-folder">
+                 data-action="select-folder"
+                 tabindex="0"
+                 role="button"
+                 aria-label="${escAttr(name)}, ${escAttr(detailText)}">
                 <div class="poster-card-media">
                     <img class="poster-card-img"
                          src="${imgSrc}"
@@ -475,18 +548,42 @@ function buildPosterCardHtml(video, sectionIdx, vidIdx) {
     const dotted   = [rating, year, duration].filter(Boolean)
                         .join('<span class="card-detail-dot">·</span>');
 
+    const progressEntry = state.watchProgress.get(video.path);
+    const progressPct = (progressEntry && video.duration_seconds && !progressEntry.completed)
+        ? Math.round((progressEntry.position / video.duration_seconds) * 100)
+        : 0;
+    const progressBar = progressPct > 1
+        ? `<div class="poster-card-progress" style="width:${progressPct}%"></div>`
+        : '';
+    const watchedBadge = progressEntry?.completed
+        ? `<div class="watched-badge" aria-label="Watched">
+               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                   <polyline points="20 6 9 17 4 12"/>
+               </svg>
+           </div>`
+        : '';
+    const qualityBadge = video.quality
+        ? `<span class="quality-badge">${escHtml(video.quality)}</span>`
+        : '';
+
     return `
         <div class="poster-card loading"
              data-path="${escAttr(video.path)}"
              data-action="select-video"
              data-section-idx="${sectionIdx}"
-             data-vid-idx="${vidIdx}">
+             data-vid-idx="${vidIdx}"
+             tabindex="0"
+             role="button"
+             aria-label="${escAttr(displayTitle)}${meta?.year ? ', ' + meta.year : ''}">
             <div class="poster-card-media">
                 <img class="poster-card-img"
                      src="${imgSrc}"
                      loading="lazy"
                      onerror="this.onerror=null;this.closest('.poster-card').classList.add('no-thumb')"
                      alt="">
+                ${qualityBadge}
+                ${watchedBadge}
             </div>
             <div class="poster-card-play" aria-hidden="true">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
@@ -497,6 +594,7 @@ function buildPosterCardHtml(video, sectionIdx, vidIdx) {
                 <div class="poster-card-title">${escHtml(displayTitle)}</div>
                 ${dotted ? `<div class="poster-card-details">${dotted}</div>` : ''}
             </div>
+            ${progressBar}
         </div>`;
 }
 
@@ -827,11 +925,21 @@ async function saveProgress(videoPath) {
     if (!state.tunnelUrl || !videoPath) return;
     const position = videoPlayer.currentTime;
     if (position < 5) return;
+    const delta = Math.abs(position - state.lastSavedPosition);
+    if (delta < 8 && videoPlayer.paused) return;
+    state.lastSavedPosition = position;
+    const duration = videoPlayer.duration || 0;
     try {
         await fetch(`${state.tunnelUrl}/api/progress`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: videoPath, position }),
+            body: JSON.stringify({ path: videoPath, position, duration }),
+        });
+        // Keep local watchProgress in sync so the progress bar updates on next browse render
+        state.watchProgress.set(videoPath, {
+            position,
+            updated_at: new Date().toISOString(),
+            completed: duration > 0 && (position / duration) > 0.95,
         });
     } catch { /* ignore */ }
 }
@@ -966,6 +1074,138 @@ function hideFormatWarning() {
 }
 
 // ============================================================
+// Volume control
+// ============================================================
+
+function restoreVolume() {
+    const saved = parseFloat(localStorage.getItem('lowkey_volume'));
+    if (!isNaN(saved)) {
+        videoPlayer.volume = saved;
+        if (volumeSlider) volumeSlider.value = saved;
+    }
+    syncVolumeUI();
+}
+
+function syncVolumeUI() {
+    if (!volumeSlider || !volumeDisplay || !muteBtn) return;
+    const vol = videoPlayer.muted ? 0 : videoPlayer.volume;
+    volumeSlider.value = videoPlayer.muted ? 0 : videoPlayer.volume;
+    volumeDisplay.textContent = `${Math.round(vol * 100)}%`;
+    muteBtn.classList.toggle('muted', videoPlayer.muted || videoPlayer.volume === 0);
+}
+
+if (volumeSlider) {
+    volumeSlider.addEventListener('input', () => {
+        videoPlayer.volume = parseFloat(volumeSlider.value);
+        videoPlayer.muted = false;
+        localStorage.setItem('lowkey_volume', volumeSlider.value);
+        syncVolumeUI();
+    });
+}
+
+if (muteBtn) {
+    muteBtn.addEventListener('click', () => {
+        videoPlayer.muted = !videoPlayer.muted;
+        syncVolumeUI();
+    });
+}
+
+videoPlayer.addEventListener('volumechange', syncVolumeUI);
+
+// ============================================================
+// Subtitle size control
+// ============================================================
+
+function restoreSubtitleSize() {
+    const saved = localStorage.getItem('lowkey_sub_size');
+    if (saved) document.documentElement.style.setProperty('--sub-size', saved);
+}
+
+function setSubtitleSize(delta) {
+    const current = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--sub-size') || '1.2'
+    );
+    const next = Math.min(3, Math.max(0.6, current + delta));
+    const val = next.toFixed(1) + 'em';
+    document.documentElement.style.setProperty('--sub-size', val);
+    localStorage.setItem('lowkey_sub_size', val);
+}
+
+// ============================================================
+// Keyboard shortcuts modal
+// ============================================================
+
+const SHORTCUTS_LIST = [
+    ['Space',        'Play / Pause'],
+    ['F',            'Toggle fullscreen'],
+    ['M',            'Toggle mute'],
+    ['↑ / ↓',        'Volume +/− 10%'],
+    ['→ / ←',        'Seek +/− 10 seconds'],
+    ['Shift + →',    'Next video'],
+    ['Shift + ←',    'Previous video'],
+    ['Esc',          'Back to browse'],
+    ['H / ?',        'Toggle this help'],
+];
+
+function toggleShortcutsModal() {
+    if (!shortcutsModal) return;
+    const visible = shortcutsModal.classList.toggle('visible');
+    if (visible) {
+        const rows = SHORTCUTS_LIST.map(([key, desc]) =>
+            `<tr><td class="shortcut-key">${escHtml(key)}</td><td class="shortcut-desc">${escHtml(desc)}</td></tr>`
+        ).join('');
+        shortcutsModal.querySelector('.shortcuts-table-body').innerHTML = rows;
+        shortcutsModal.querySelector('.shortcuts-close')?.focus();
+    }
+}
+
+// ============================================================
+// Global browse search
+// ============================================================
+
+function renderBrowseSearchResults(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) { renderBrowse(); return; }
+
+    const results = state.videos.filter(v => {
+        const meta = cacheGet(v.path);
+        const title = (meta?.title || '').toLowerCase();
+        return v.name.toLowerCase().includes(q) || title.includes(q) || v.path.toLowerCase().includes(q);
+    });
+
+    if (results.length === 0) {
+        browseSectionsEl.innerHTML = `
+            <div class="empty-state">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1" opacity="0.2" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <p>No results for "${escHtml(query)}"</p>
+            </div>`;
+        return;
+    }
+
+    const idx = 0;
+    state.browseSections = [{ title: 'Search Results', videos: results, drillPath: [] }];
+    state.browseFolderCards = [];
+    const cards = results.map((v, i) => buildPosterCardHtml(v, idx, i)).join('');
+    browseSectionsEl.innerHTML = `
+        <div class="browse-section">
+            <div class="browse-section-header">
+                <span class="browse-section-title">Results for "${escHtml(query)}"</span>
+                <span class="browse-section-count">${results.length}</span>
+            </div>
+            <div class="browse-cards browse-search-grid">${cards}</div>
+        </div>`;
+
+    cardIndex.clear();
+    folderCardIndex.clear();
+    for (const card of browseSectionsEl.querySelectorAll('.poster-card[data-path]')) {
+        cardIndex.set(card.dataset.path, card);
+    }
+}
+
+// ============================================================
 // Status
 // ============================================================
 
@@ -986,6 +1226,14 @@ function updateStatus(status, message) {
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
+
+    // Shortcuts modal toggle — works in both views
+    if (e.code === 'KeyH' || (e.code === 'Slash' && e.shiftKey)) {
+        e.preventDefault();
+        toggleShortcutsModal();
+        return;
+    }
+
     if (state.view === 'browse') return;
 
     switch (e.code) {
@@ -1008,16 +1256,22 @@ document.addEventListener('keydown', (e) => {
         case 'ArrowUp':
             e.preventDefault();
             videoPlayer.volume = Math.min(1, videoPlayer.volume + 0.1);
+            syncVolumeUI();
             break;
         case 'ArrowDown':
             e.preventDefault();
             videoPlayer.volume = Math.max(0, videoPlayer.volume - 0.1);
+            syncVolumeUI();
             break;
         case 'KeyM':
             videoPlayer.muted = !videoPlayer.muted;
             break;
         case 'Escape':
-            showBrowseView();
+            if (shortcutsModal?.classList.contains('visible')) {
+                toggleShortcutsModal();
+            } else {
+                showBrowseView();
+            }
             break;
     }
 });
@@ -1059,13 +1313,23 @@ videoPlayer.textTracks.addEventListener('change', () => {
 // Delegated event listeners (replaces inline onclick attributes)
 // ============================================================
 
-// Browse sections → poster cards and folder cards
-browseSectionsEl.addEventListener('click', e => {
-    const target = e.target.closest('[data-action]');
+// Browse sections → poster cards and folder cards (click + keyboard)
+function handleBrowseAction(target) {
     if (!target) return;
     switch (target.dataset.action) {
         case 'select-folder': selectFolderFromBrowse(Number(target.dataset.folderIdx)); break;
         case 'select-video':  selectFromBrowse(Number(target.dataset.sectionIdx), Number(target.dataset.vidIdx)); break;
+    }
+}
+
+browseSectionsEl.addEventListener('click', e => {
+    handleBrowseAction(e.target.closest('[data-action]'));
+});
+
+browseSectionsEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+        const target = e.target.closest('[data-action]');
+        if (target) { e.preventDefault(); handleBrowseAction(target); }
     }
 });
 
@@ -1085,6 +1349,12 @@ videoItems.addEventListener('click', e => {
 // ============================================================
 
 searchInput.addEventListener('input', debounce(() => renderDrill(), 200));
+
+if (browseSearchInput) {
+    browseSearchInput.addEventListener('input', debounce(() => {
+        renderBrowseSearchResults(browseSearchInput.value);
+    }, 200));
+}
 
 // Periodic health check + refresh (every 2 minutes)
 setInterval(async () => {

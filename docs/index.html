@@ -28,6 +28,16 @@
              BROWSE VIEW  (default)
              ════════════════════════════════════════ -->
         <div id="browseView" class="browse-view">
+            <div class="browse-search-bar">
+                <svg class="browse-search-icon" width="18" height="18" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input type="text" id="browseSearchInput" placeholder="Search library…"
+                       autocomplete="off" aria-label="Search library" spellcheck="false">
+            </div>
             <div id="browseSections" class="browse-sections">
                 <div class="browse-loading">
                     <span class="browse-loading-text">Loading library…</span>
@@ -40,14 +50,26 @@
              ════════════════════════════════════════ -->
         <div id="playerView" class="player-view hidden">
 
-            <!-- Back to browse -->
-            <button class="back-btn" onclick="showBrowseView()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2.5" aria-hidden="true">
-                    <polyline points="15 18 9 12 15 6"/>
-                </svg>
-                Browse
-            </button>
+            <!-- Back to browse + shortcuts help -->
+            <div class="player-topbar">
+                <button class="back-btn" onclick="showBrowseView()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                        <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                    Browse
+                </button>
+                <button class="shortcuts-help-btn" onclick="toggleShortcutsModal()" aria-label="Keyboard shortcuts (H)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                    <span>?</span>
+                </button>
+            </div>
 
             <div class="main-content">
 
@@ -101,6 +123,37 @@
                     <div class="now-playing" id="nowPlaying">
                         <div class="now-playing-title" id="nowPlayingTitle">No video selected</div>
                         <div class="now-playing-meta" id="nowPlayingMeta"></div>
+
+                        <!-- Volume control -->
+                        <div class="volume-control" id="volumeControl">
+                            <button class="mute-btn" id="muteBtn" aria-label="Toggle mute">
+                                <svg class="vol-icon vol-on" width="16" height="16" viewBox="0 0 24 24"
+                                     fill="none" stroke="currentColor" stroke-width="2"
+                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                                </svg>
+                                <svg class="vol-icon vol-off" width="16" height="16" viewBox="0 0 24 24"
+                                     fill="none" stroke="currentColor" stroke-width="2"
+                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                    <line x1="23" y1="9" x2="17" y2="15"/>
+                                    <line x1="17" y1="9" x2="23" y2="15"/>
+                                </svg>
+                            </button>
+                            <input type="range" id="volumeSlider" class="volume-slider"
+                                   min="0" max="1" step="0.02" value="1" aria-label="Volume">
+                            <span class="volume-display" id="volumeDisplay">100%</span>
+                        </div>
+
+                        <!-- Subtitle size controls -->
+                        <div class="subtitle-controls" id="subtitleControls">
+                            <span class="subtitle-controls-label">Subtitles</span>
+                            <button class="sub-size-btn" onclick="setSubtitleSize(-0.1)" aria-label="Decrease subtitle size">A−</button>
+                            <button class="sub-size-btn" onclick="setSubtitleSize(0.1)" aria-label="Increase subtitle size">A+</button>
+                        </div>
+
                         <div class="audio-track-selector" id="audioTrackSelector" style="display:none;"></div>
                     </div>
 
@@ -144,6 +197,26 @@
         <footer class="footer">
             <p>Build with an inner rage against the system &bull; Passing Filters &bull; Listen with no wories</p>
         </footer>
+
+        <!-- Keyboard shortcuts modal -->
+        <div id="shortcutsModal" class="shortcuts-modal" role="dialog"
+             aria-modal="true" aria-label="Keyboard shortcuts">
+            <div class="shortcuts-modal-content">
+                <div class="shortcuts-modal-header">
+                    <span class="shortcuts-modal-title">Keyboard Shortcuts</span>
+                    <button class="shortcuts-close" onclick="toggleShortcutsModal()" aria-label="Close">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </button>
+                </div>
+                <table class="shortcuts-table" aria-label="Shortcuts list">
+                    <tbody class="shortcuts-table-body"></tbody>
+                </table>
+            </div>
+        </div>
 
     </div>
     <script src="app.js"></script>

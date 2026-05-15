@@ -77,6 +77,9 @@ def load_config():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    # Allow overriding the TMDB key via environment variable
+    config["tmdb_api_key"] = os.environ.get("TMDB_API_KEY", config.get("tmdb_api_key", ""))
+
     required_keys = ["video_folder", "server_port"]
     for key in required_keys:
         if key not in config or not config[key]:
@@ -751,6 +754,11 @@ class VideoScanner:
             if self.metadata_cache:
                 duration = self.metadata_cache.get_duration(self.video_folder, file_path)
 
+            quality_match = re.search(r'(4[kK]|2160p|1080p|720p|480p)', file_path.name, re.IGNORECASE)
+            quality = quality_match.group(1).upper() if quality_match else None
+            if quality == "4K":
+                quality = "4K"
+
             videos.append({
                 "name": file_path.stem,
                 "filename": file_path.name,
@@ -762,6 +770,7 @@ class VideoScanner:
                 "folder": folder,
                 "subtitles": subs_list if subs_list else None,
                 "duration_seconds": duration,
+                "quality": quality,
             })
 
         return videos
@@ -888,7 +897,7 @@ class ThumbnailGenerator:
             "-i", str(file_path),
             "-vframes", "1",
             "-q:v", "3",
-            "-vf", "scale=320:-1",
+            "-vf", "scale=480:-1",
             "-y",
             str(out_path),
         ]
@@ -955,15 +964,26 @@ class ProgressStore:
         except Exception as e:
             print(f"[PROGRESS] Failed to save: {e}")
 
-    def save(self, path, position):
+    def save(self, path, position, duration=None):
         with self._lock:
-            self._data[path] = {"position": position, "updated_at": datetime.now(timezone.utc).isoformat()}
+            completed = False
+            if duration and duration > 0:
+                completed = (position / duration) > 0.95
+            self._data[path] = {
+                "position": position,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "completed": completed,
+            }
             self._save()
 
     def get(self, path):
         with self._lock:
             entry = self._data.get(path)
             return entry["position"] if entry else None
+
+    def get_all(self):
+        with self._lock:
+            return dict(self._data)
 
 
 # ============================================================
@@ -1427,6 +1447,8 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/metadata/"):
             relative_path = path[14:]
             self._handle_api_metadata(relative_path, head_only)
+        elif path == "/api/progress/all":
+            self._handle_api_get_all_progress(head_only)
         elif path.startswith("/api/progress/"):
             relative_path = path[14:]
             self._handle_api_get_progress(relative_path, head_only)
@@ -1492,6 +1514,26 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
+    def _send_json_error(self, code, message):
+        body = json.dumps({"error": message, "code": code}, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_api_get_all_progress(self, head_only=False):
+        data = self.progress_store.get_all() if self.progress_store else {}
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(body)
+
     def _handle_api_get_progress(self, relative_path, head_only=False):
         position = None
         if self.progress_store:
@@ -1519,13 +1561,14 @@ class StreamRequestHandler(http.server.BaseHTTPRequestHandler):
             data = json.loads(body.decode("utf-8"))
             path = data.get("path", "")
             position = float(data.get("position", 0))
+            duration = float(data.get("duration", 0)) or None
             if not path:
-                self.send_error(400, "Missing path")
+                self._send_json_error(400, "Missing path")
                 return
             if not (0.0 <= position <= 360000.0):
-                self.send_error(400, "Invalid position")
+                self._send_json_error(400, "Invalid position")
                 return
-            self.progress_store.save(path, position)
+            self.progress_store.save(path, position, duration)
             resp = b'{"ok":true}'
             self.send_response(200)
             self._send_cors_headers()
