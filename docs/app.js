@@ -64,9 +64,6 @@ const browseView         = document.getElementById('browseView');
 const playerView         = document.getElementById('playerView');
 const browseSectionsEl   = document.getElementById('browseSections');
 const browseSearchInput  = document.getElementById('browseSearchInput');
-const volumeSlider       = document.getElementById('volumeSlider');
-const volumeDisplay      = document.getElementById('volumeDisplay');
-const muteBtn            = document.getElementById('muteBtn');
 const shortcutsModal     = document.getElementById('shortcutsModal');
 
 // ISO 639 language code → display name
@@ -178,7 +175,6 @@ async function init() {
         renderOfflineState('Could not load config.json.');
     }
 
-    restoreVolume();
     restoreSubtitleSize();
 }
 
@@ -1098,45 +1094,6 @@ function hideFormatWarning() {
 }
 
 // ============================================================
-// Volume control
-// ============================================================
-
-function restoreVolume() {
-    const saved = parseFloat(localStorage.getItem('lowkey_volume'));
-    if (!isNaN(saved)) {
-        videoPlayer.volume = saved;
-        if (volumeSlider) volumeSlider.value = saved;
-    }
-    syncVolumeUI();
-}
-
-function syncVolumeUI() {
-    if (!volumeSlider || !volumeDisplay || !muteBtn) return;
-    const vol = videoPlayer.muted ? 0 : videoPlayer.volume;
-    volumeSlider.value = videoPlayer.muted ? 0 : videoPlayer.volume;
-    volumeDisplay.textContent = `${Math.round(vol * 100)}%`;
-    muteBtn.classList.toggle('muted', videoPlayer.muted || videoPlayer.volume === 0);
-}
-
-if (volumeSlider) {
-    volumeSlider.addEventListener('input', () => {
-        videoPlayer.volume = parseFloat(volumeSlider.value);
-        videoPlayer.muted = false;
-        localStorage.setItem('lowkey_volume', volumeSlider.value);
-        syncVolumeUI();
-    });
-}
-
-if (muteBtn) {
-    muteBtn.addEventListener('click', () => {
-        videoPlayer.muted = !videoPlayer.muted;
-        syncVolumeUI();
-    });
-}
-
-videoPlayer.addEventListener('volumechange', syncVolumeUI);
-
-// ============================================================
 // Subtitle size control
 // ============================================================
 
@@ -1293,12 +1250,10 @@ document.addEventListener('keydown', (e) => {
         case 'ArrowUp':
             e.preventDefault();
             videoPlayer.volume = Math.min(1, videoPlayer.volume + 0.1);
-            syncVolumeUI();
             break;
         case 'ArrowDown':
             e.preventDefault();
             videoPlayer.volume = Math.max(0, videoPlayer.volume - 0.1);
-            syncVolumeUI();
             break;
         case 'KeyM':
             videoPlayer.muted = !videoPlayer.muted;
